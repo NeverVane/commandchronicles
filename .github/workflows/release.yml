@@ -176,51 +176,48 @@ jobs:
 
           ---
 
-          **Full Changelog**: https://github.com/${{ github.repository }}/compare/$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "initial")...${{ steps.version.outputs.version }}
+          **Full Changelog**: https://github.com/${{ github.repository }}/commits/${{ steps.version.outputs.version }}
           EOF
 
           echo "Generated release notes:"
           cat release_notes.md
 
-      - name: Check if release exists
-        id: check_release
-        run: |
-          if gh release view "${{ steps.version.outputs.version }}" > /dev/null 2>&1; then
-            echo "exists=true" >> $GITHUB_OUTPUT
-            echo "Release ${{ steps.version.outputs.version }} already exists"
-          else
-            echo "exists=false" >> $GITHUB_OUTPUT
-            echo "Release ${{ steps.version.outputs.version }} does not exist"
-          fi
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Create GitHub Release
-        if: steps.check_release.outputs.exists == 'false'
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: ${{ steps.version.outputs.version }}
-          name: "🚀 CommandChronicles CLI ${{ steps.version.outputs.version }} - Secure Shell History Management"
-          body_path: release_notes.md
-          discussion_category_name: "Releases"
-          files: |
-            ./release-assets/ccr-linux-amd64
-            ./release-assets/ccr-linux-amd64.sha256
-            ./release-assets/ccr-linux-arm64
-            ./release-assets/ccr-linux-arm64.sha256
-            ./release-assets/ccr-darwin-amd64
-            ./release-assets/ccr-darwin-amd64.sha256
-            ./release-assets/ccr-darwin-arm64
-            ./release-assets/ccr-darwin-arm64.sha256
+        run: |
+          # Check if release already exists
+          if gh release view "${{ steps.version.outputs.version }}" > /dev/null 2>&1; then
+            echo "Release ${{ steps.version.outputs.version }} already exists, skipping creation"
+            exit 0
+          fi
+
+          # Determine if this is a prerelease
+          PRERELEASE_FLAG=""
+          if [[ "${{ steps.version.outputs.version }}" =~ -(rc|beta|alpha|dev) ]]; then
+            PRERELEASE_FLAG="--prerelease"
+          fi
+
+          # Create the release
+          gh release create "${{ steps.version.outputs.version }}" \
+            --title "🚀 CommandChronicles CLI ${{ steps.version.outputs.version }} - Secure Shell History Management" \
+            --notes-file release_notes.md \
+            --discussion-category "Releases" \
+            $PRERELEASE_FLAG \
+            ./release-assets/ccr-linux-amd64 \
+            ./release-assets/ccr-linux-amd64.sha256 \
+            ./release-assets/ccr-linux-arm64 \
+            ./release-assets/ccr-linux-arm64.sha256 \
+            ./release-assets/ccr-darwin-amd64 \
+            ./release-assets/ccr-darwin-amd64.sha256 \
+            ./release-assets/ccr-darwin-arm64 \
+            ./release-assets/ccr-darwin-arm64.sha256 \
             ./release-assets/checksums.txt
-          draft: false
-          prerelease: ${{ contains(steps.version.outputs.version, '-rc') || contains(steps.version.outputs.version, '-beta') || contains(steps.version.outputs.version, '-alpha') || contains(steps.version.outputs.version, '-dev') }}
-          generate_release_notes: false
-          append_body: false
+
+          echo "✅ Release created successfully"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Cleanup artifacts
+        if: always()
         uses: geekyeggo/delete-artifact@v2
         with:
           name: |
