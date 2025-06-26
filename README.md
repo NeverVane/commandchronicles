@@ -1,13 +1,15 @@
 # CommandChronicles CLI (ccr)
 
 ```
-╔═══════════════════════════════════════════════════════════════════╗
-                                          CommandChronicles CLI (ccr) v0.1.0
+===================================================================
+                CommandChronicles CLI (ccr) v0.1.0
+===================================================================
 
-                            🚀 A modern shell history management tool that supercharges
-                                your command line experience with intelligent search
-                                            and secure local storage
-╚═══════════════════════════════════════════════════════════════════╝
+  🚀 A modern shell history management tool that supercharges
+     your command line experience with intelligent search
+                and secure local storage
+
+===================================================================
 ```
 
 <p align="center">

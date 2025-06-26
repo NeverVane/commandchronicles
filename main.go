@@ -149,13 +149,15 @@ func main() {
 		Use:   "ccr",
 		Short: "CommandChronicles CLI - Enhanced shell history management",
 		Long: `
-  ╔═══════════════════════════════════════════════════════════════════╗
-  ║               CommandChronicles CLI (ccr) v` + version + `                  ║
-  ║                                                                   ║
-  ║     >> A modern shell history management tool that supercharges   ║
-  ║        your command line experience with intelligent search       ║
-  ║                   and secure local storage                        ║
-  ╚═══════════════════════════════════════════════════════════════════╝
+===================================================================
+              CommandChronicles CLI (ccr) v` + version + `
+===================================================================
+
+  🚀 A modern shell history management tool that supercharges
+     your command line experience with intelligent search
+                and secure local storage
+
+===================================================================
 
 CommandChronicles CLI transforms your shell history into a powerful knowledge
 base, capturing rich context for every command and providing lightning-fast
@@ -2311,16 +2313,16 @@ func versionCmd(cfg *config.Config) *cobra.Command {
 			formatter.SetFlags(verbose, false, noColor)
 
 			formatter.Print(`
-  ╔═══════════════════════════════════════════════════════════════════╗
-  ║                    CommandChronicles CLI                          ║
-  ║                      Version %s                                 ║
-  ╚═══════════════════════════════════════════════════════════════════╝
+===================================================================
+                  CommandChronicles CLI
+                      Version %s
+===================================================================
 
-  Version:     %s
-  Build Date:  %s
-  Commit:      %s
-  Author:      %s
-  Homepage:    %s
+Version:     %s
+Build Date:  %s
+Commit:      %s
+Author:      %s
+Homepage:    %s
   License:     MIT
 
   System Information:
