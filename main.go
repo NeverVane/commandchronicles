@@ -35,7 +35,7 @@ import (
 	"github.com/NeverVane/commandchronicles/pkg/security"
 	securestorage "github.com/NeverVane/commandchronicles/pkg/storage"
 	"github.com/charmbracelet/lipgloss"
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
@@ -2457,7 +2457,7 @@ and storage system health. Useful for verifying command recording is working.`,
 			// Raw database inspection (works even when locked)
 			formatter.Separator()
 			formatter.Stats("Database Contents (Raw):")
-			db, err := sql.Open("sqlite3", dbPath)
+			db, err := sql.Open("sqlite", dbPath)
 			if err != nil {
 				formatter.Error("Failed to open database: %v", err)
 			} else {

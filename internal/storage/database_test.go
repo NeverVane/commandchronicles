@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/NeverVane/commandchronicles/internal/config"
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

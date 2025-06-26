@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 	"github.com/NeverVane/commandchronicles/internal/config"
 	"github.com/NeverVane/commandchronicles/internal/logger"
 )
@@ -86,7 +86,7 @@ func (db *Database) initialize(opts *DatabaseOptions) error {
 		Msg("Opening database connection")
 
 	// Open database connection
-	sqlDB, err := sql.Open("sqlite3", connStr)
+	sqlDB, err := sql.Open("sqlite", connStr)
 	if err != nil {
 		return fmt.Errorf("failed to open database: %w", err)
 	}

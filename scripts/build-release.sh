@@ -216,35 +216,17 @@ build_platform() {
     # Set build environment
     export GOOS="$goos"
     export GOARCH="$goarch"
-    export CGO_ENABLED=1
 
-    # Platform-specific CGO setup
-    case "$goos" in
-        linux)
-            if [[ "$goarch" == "arm64" ]]; then
-                # For cross-compilation, you might need to install cross-compilation tools
-                # export CC=aarch64-linux-gnu-gcc
-                log_warning "ARM64 cross-compilation may require additional tools"
-            fi
-            ;;
+    log_info "Building $platform_name binary using pure Go (no CGO)..."
 
-        darwin)
-            if [[ "$(uname)" != "Darwin" ]]; then
-                log_warning "Cross-compiling for macOS from non-macOS system"
-            fi
-            ;;
-    esac
+    # Pure Go build - no CGO needed since we use modernc.org/sqlite
+    # This enables true cross-platform compilation from any host
+    export CGO_ENABLED=0
+    export GOOS="$goos"
+    export GOARCH="$goarch"
 
-    # Build the binary
-    go build \
-        -ldflags="-X main.version=$VERSION_CLEAN \
-                  -X main.commit=$COMMIT \
-                  -X main.date=$DATE \
-                  -X main.author='$AUTHOR' \
-                  -X main.website=$WEBSITE \
-                  -w -s" \
-        -o "$output_path" \
-        . || {
+    # Build the binary with version info and optimization flags
+    go build -ldflags="-X main.version=$VERSION_CLEAN -X main.commit=$COMMIT -X main.date=$DATE -X 'main.author=$AUTHOR' -X main.website=$WEBSITE -w -s" -o "$output_path" . || {
         log_error "Failed to build for $platform_name"
         return 1
     }

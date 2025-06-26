@@ -18,6 +18,7 @@ permissions:
 jobs:
   build:
     name: Build Binaries
+    runs-on: ubuntu-latest
     strategy:
       matrix:
         include:
@@ -25,23 +26,18 @@ jobs:
             arch: amd64
             goos: linux
             goarch: amd64
-            runner: ubuntu-latest
           - os: linux
             arch: arm64
             goos: linux
             goarch: arm64
-            runner: ubuntu-latest
           - os: darwin
             arch: amd64
             goos: darwin
             goarch: amd64
-            runner: macos-13
           - os: darwin
             arch: arm64
             goos: darwin
             goarch: arm64
-            runner: macos-14
-    runs-on: ${{ matrix.runner }}
 
     steps:
       - name: Checkout code
@@ -74,21 +70,13 @@ jobs:
           echo "website=https://commandchronicles.dev" >> $GITHUB_OUTPUT
 
       - name: Build binary
-        env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: 1
         run: |
-          # Set up cross-compilation for Linux ARM64
-          if [ "${{ matrix.goos }}" = "linux" ] && [ "${{ matrix.goarch }}" = "arm64" ]; then
-            sudo apt-get update
-            sudo apt-get install -y gcc-aarch64-linux-gnu
-            export CC=aarch64-linux-gnu-gcc
-          fi
+          BINARY_NAME="ccr-${{ matrix.os }}-${{ matrix.arch }}"
 
-          # Build binary with version information
-          BINARY_NAME="ccr-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.ext }}"
+          echo "Building ${{ matrix.os }}/${{ matrix.arch }} binary with pure Go..."
 
+          # Pure Go build - no CGO needed since we use modernc.org/sqlite
+          CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
           go build \
             -ldflags="-X main.version=${{ steps.version.outputs.version_clean }} \
                       -X main.commit=${{ steps.metadata.outputs.commit }} \
@@ -101,16 +89,14 @@ jobs:
 
           # Verify binary was created
           ls -la "${BINARY_NAME}"
-          file "${BINARY_NAME}"
+          file "${BINARY_NAME}" || echo "file command not available"
 
-          # Test the binary (basic version check) - only for native platform
-          if [ "${{ matrix.goos }}" = "linux" ] && [ "${{ matrix.goarch }}" = "amd64" ]; then
-            ./"${BINARY_NAME}" version || echo "Binary test failed but continuing..."
-          fi
+          # Show binary info
+          echo "Binary size: $(du -h ${BINARY_NAME} | cut -f1)"
 
       - name: Generate checksum
         run: |
-          BINARY_NAME="ccr-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.ext }}"
+          BINARY_NAME="ccr-${{ matrix.os }}-${{ matrix.arch }}"
           sha256sum "${BINARY_NAME}" > "${BINARY_NAME}.sha256"
           echo "Generated checksum for ${BINARY_NAME}:"
           cat "${BINARY_NAME}.sha256"
@@ -120,8 +106,8 @@ jobs:
         with:
           name: ccr-${{ matrix.os }}-${{ matrix.arch }}
           path: |
-            ccr-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.ext }}
-            ccr-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.ext }}.sha256
+            ccr-${{ matrix.os }}-${{ matrix.arch }}
+            ccr-${{ matrix.os }}-${{ matrix.arch }}.sha256
           retention-days: 5
 
   release:
@@ -365,7 +351,7 @@ jobs:
       - name: Release Success
         run: |
           echo "🎉 Release ${{ github.ref_name }} completed successfully!"
-          echo "📦 Binaries built for 4 platforms (Unix systems only)"
+          echo "📦 Binaries built for 4 platforms (Linux and macOS)"
           echo "✅ GitHub release created with enhanced formatting"
           echo "🔗 Release URL: https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}"
           echo "📊 Release features: Direct download links, security verification, quick start guide"
