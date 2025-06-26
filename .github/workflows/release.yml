@@ -298,13 +298,26 @@ jobs:
           echo "Generated release notes:"
           cat release_notes.md
 
+      - name: Check if release exists
+        id: check_release
+        run: |
+          if gh release view "${{ steps.version.outputs.version }}" > /dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Release ${{ steps.version.outputs.version }} already exists"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "Release ${{ steps.version.outputs.version }} does not exist"
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Create GitHub Release
+        if: steps.check_release.outputs.exists == 'false'
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ steps.version.outputs.version }}
           name: "🚀 CommandChronicles CLI ${{ steps.version.outputs.version }} - Secure Shell History Management"
           body_path: release_notes.md
-          make_latest: true
           discussion_category_name: "Releases"
           files: |
             ./release-assets/ccr-linux-amd64
