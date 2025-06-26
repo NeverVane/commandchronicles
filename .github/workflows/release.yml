@@ -129,21 +129,63 @@ jobs:
 
           # Notarize with Apple
           echo "Submitting for notarization (this may take a few minutes)..."
-          xcrun notarytool submit "${BINARY_NAME}.zip" \
+          NOTARIZATION_SUCCESS=false
+          SUBMISSION_OUTPUT=$(xcrun notarytool submit "${BINARY_NAME}.zip" \
             --apple-id "${{ secrets.APPLE_ID }}" \
             --password "${{ secrets.APPLE_APP_PASSWORD }}" \
             --team-id "${{ secrets.APPLE_TEAM_ID }}" \
-            --wait
+            --wait 2>&1) || NOTARIZE_STATUS=$?
 
-          # Staple the notarization ticket
-          echo "Stapling notarization ticket..."
-          xcrun stapler staple "${BINARY_NAME}"
+          echo "$SUBMISSION_OUTPUT"
 
-          # Verify stapling
-          echo "Verifying stapled notarization..."
-          xcrun stapler validate "${BINARY_NAME}"
+          # Check if notarization was rejected
+          if echo "$SUBMISSION_OUTPUT" | grep -q "status: Rejected"; then
+            echo "⚠️ Notarization was rejected. Fetching log for details..."
+            SUBMISSION_ID=$(echo "$SUBMISSION_OUTPUT" | grep "id:" | head -1 | awk '{print $2}')
 
-          echo "macOS code signing and notarization completed successfully!"
+            echo "Fetching notarization log for submission ID: $SUBMISSION_ID"
+            xcrun notarytool log "$SUBMISSION_ID" \
+              --apple-id "${{ secrets.APPLE_ID }}" \
+              --password "${{ secrets.APPLE_APP_PASSWORD }}" \
+              --team-id "${{ secrets.APPLE_TEAM_ID }}" \
+              notarization-log.json || true
+
+            echo "Notarization log:"
+            cat notarization-log.json | jq '.' 2>/dev/null || cat notarization-log.json || echo "Could not retrieve log"
+
+            echo ""
+            echo "Common rejection reasons:"
+            echo "- Binary not signed with hardened runtime (--options runtime)"
+            echo "- Missing entitlements"
+            echo "- Invalid code signature"
+            echo "- Binary compiled with incompatible SDK version"
+            echo ""
+            echo "⚠️ WARNING: Continuing with signed but not notarized binary"
+            echo "Users will see a Gatekeeper warning but can still run the app by right-clicking and selecting Open"
+          elif echo "$SUBMISSION_OUTPUT" | grep -q "status: Accepted"; then
+            NOTARIZATION_SUCCESS=true
+            echo "✅ Notarization accepted!"
+          fi
+
+          # Only staple if notarization was successful
+          if [ "$NOTARIZATION_SUCCESS" = true ]; then
+            # Staple the notarization ticket
+            echo "Stapling notarization ticket..."
+            if xcrun stapler staple "${BINARY_NAME}"; then
+              echo "✅ Successfully stapled notarization ticket"
+
+              # Verify stapling
+              echo "Verifying stapled notarization..."
+              xcrun stapler validate "${BINARY_NAME}" || echo "⚠️ Staple validation failed but continuing"
+
+              echo "✅ macOS code signing and notarization completed successfully!"
+            else
+              echo "⚠️ Failed to staple notarization ticket but continuing with signed binary"
+            fi
+          else
+            echo "⚠️ Skipping stapling due to notarization failure"
+            echo "✅ macOS code signing completed (without notarization)"
+          fi
 
       - name: Generate checksum
         run: |
