@@ -1,0 +1,91 @@
+{
+  "meta": {
+    "generatedAt": "2025-05-28T14:43:54.182Z",
+    "tasksAnalyzed": 10,
+    "thresholdScore": 5,
+    "projectName": "Taskmaster",
+    "usedResearch": true
+  },
+  "complexityAnalysis": [
+    {
+      "taskId": 1,
+      "taskTitle": "Setup Project Structure and Core Binary",
+      "complexityScore": 5,
+      "recommendedSubtasks": 7,
+      "expansionPrompt": "Break down the setup of the Go project structure and core binary into subtasks covering module initialization, directory layout, CLI framework integration, skeleton command creation, configuration loading, error/logging setup, and cross-platform compilation.",
+      "reasoning": "This task is moderately complex due to the need to establish a robust, idiomatic Go project structure, integrate a CLI framework, and ensure cross-platform compatibility. Each step (project layout, CLI setup, config, error handling, etc.) is distinct and best handled as a separate subtask for clarity and maintainability.[1][2][3][4][5]"
+    },
+    {
+      "taskId": 2,
+      "taskTitle": "Implement Secure Storage System",
+      "complexityScore": 8,
+      "recommendedSubtasks": 8,
+      "expansionPrompt": "Expand the secure storage system implementation into subtasks for database schema design, SQLite setup, Argon2id key derivation, encryption/decryption utilities, session key management, file permission enforcement, secure storage/retrieval functions, and integration testing.",
+      "reasoning": "This task is highly complex due to the combination of cryptography (key derivation, AEAD encryption), secure session management, and database schema design. Each cryptographic and storage component introduces security and correctness challenges, warranting granular subtasks."
+    },
+    {
+      "taskId": 3,
+      "taskTitle": "Implement Command Recording System",
+      "complexityScore": 7,
+      "recommendedSubtasks": 7,
+      "expansionPrompt": "Decompose the command recording system into subtasks for struct definition, shell hook implementation (bash/zsh), context capture, session ID generation, secure storage integration, performance optimization, and cross-shell testing.",
+      "reasoning": "Capturing commands with rich context across shells, ensuring secure storage, and minimizing performance impact is non-trivial. Each integration point (struct, hooks, context, storage) is a logical subtask."
+    },
+    {
+      "taskId": 4,
+      "taskTitle": "Implement Hybrid Memory Cache System",
+      "complexityScore": 6,
+      "recommendedSubtasks": 6,
+      "expansionPrompt": "Break down the hybrid memory cache system into subtasks for cache structure design, hot cache loading, batch loading, cache maintenance (eviction/refresh), secure memory handling, and configuration integration.",
+      "reasoning": "While not as complex as cryptography, designing an efficient, secure, and configurable cache system with batch loading and memory management requires careful planning and separation of concerns."
+    },
+    {
+      "taskId": 5,
+      "taskTitle": "Implement Fuzzy Search Functionality",
+      "complexityScore": 7,
+      "recommendedSubtasks": 6,
+      "expansionPrompt": "Expand fuzzy search functionality into subtasks for fuzzy matching algorithm, metadata filtering, scoring/ranking, performance optimization, CLI interface implementation, and comprehensive testing.",
+      "reasoning": "Fuzzy search with metadata filters and performance constraints is moderately complex, involving algorithm design, filter logic, and user interface considerations. Each is best handled as a separate subtask."
+    },
+    {
+      "taskId": 6,
+      "taskTitle": "Implement TUI for Interactive Search",
+      "complexityScore": 8,
+      "recommendedSubtasks": 7,
+      "expansionPrompt": "Decompose the TUI implementation into subtasks for TUI framework setup, real-time search integration, metadata display, keyboard navigation, syntax highlighting, launch performance optimization, and shell activation integration.",
+      "reasoning": "Building a performant, interactive TUI with real-time search, keyboard handling, and shell integration is complex, requiring careful separation of UI, logic, and performance-related subtasks."
+    },
+    {
+      "taskId": 7,
+      "taskTitle": "Implement Shell Integration",
+      "complexityScore": 7,
+      "recommendedSubtasks": 6,
+      "expansionPrompt": "Break down shell integration into subtasks for bash script, zsh script, pre/post-execution hooks, up arrow key binding, compatibility testing with frameworks, and graceful degradation handling.",
+      "reasoning": "Shell integration is moderately complex due to differences between shells, need for robust hooks, key bindings, and compatibility with user environments. Each shell and integration point should be a subtask."
+    },
+    {
+      "taskId": 8,
+      "taskTitle": "Implement History Import and Export",
+      "complexityScore": 6,
+      "recommendedSubtasks": 6,
+      "expansionPrompt": "Expand history import/export into subtasks for bash import, zsh import, support for other formats, export implementation, secure data handling, and large file testing.",
+      "reasoning": "Parsing and importing various shell history formats, exporting securely, and handling large files are moderately complex and should be separated for clarity and testability."
+    },
+    {
+      "taskId": 9,
+      "taskTitle": "Implement Statistics and Analytics",
+      "complexityScore": 5,
+      "recommendedSubtasks": 6,
+      "expansionPrompt": "Decompose statistics and analytics into subtasks for command frequency analysis, success rate calculation, directory usage stats, time-based patterns, duration analysis, and CLI interface implementation.",
+      "reasoning": "While not highly complex, analytics involves several distinct calculations and reporting features, each of which is a logical subtask."
+    },
+    {
+      "taskId": 10,
+      "taskTitle": "Implement User Authentication and Key Management",
+      "complexityScore": 8,
+      "recommendedSubtasks": 7,
+      "expansionPrompt": "Break down user authentication and key management into subtasks for user initialization, key derivation, session key storage/retrieval, locking/unlocking, password change, session timeout, and secure memory handling.",
+      "reasoning": "This task is highly complex due to the need for secure cryptographic key management, session handling, and user authentication, each of which is critical and should be handled as a separate subtask."
+    }
+  ]
+}

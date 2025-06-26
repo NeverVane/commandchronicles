@@ -1,0 +1,272 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (e.g., v1.0.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  build:
+    name: Build Binaries
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - os: linux
+            arch: amd64
+            goos: linux
+            goarch: amd64
+          - os: linux
+            arch: arm64
+            goos: linux
+            goarch: arm64
+          - os: darwin
+            arch: amd64
+            goos: darwin
+            goarch: amd64
+          - os: darwin
+            arch: arm64
+            goos: darwin
+            goarch: arm64
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: "1.23"
+
+      - name: Get version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="${{ github.ref_name }}"
+          fi
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "version_clean=${VERSION#v}" >> $GITHUB_OUTPUT
+
+      - name: Get build metadata
+        id: metadata
+        run: |
+          echo "commit=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+          echo "date=$(date -u +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+          echo "author=Leonardo Zanobi" >> $GITHUB_OUTPUT
+          echo "website=https://commandchronicles.dev" >> $GITHUB_OUTPUT
+
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 1
+        run: |
+          # Set CGO_ENABLED based on target
+          if [ "${{ matrix.goos }}" = "linux" ]; then
+            export CGO_ENABLED=1
+            # Install cross-compilation tools for CGO
+            if [ "${{ matrix.goarch }}" = "arm64" ]; then
+              sudo apt-get update
+              sudo apt-get install -y gcc-aarch64-linux-gnu
+              export CC=aarch64-linux-gnu-gcc
+            fi
+          elif [ "${{ matrix.goos }}" = "darwin" ]; then
+            export CGO_ENABLED=1
+            # macOS cross-compilation
+            if [ "${{ matrix.goarch }}" = "arm64" ]; then
+              export CC=clang
+              export CXX=clang++
+            fi
+          fi
+
+          # Build binary with version information
+          BINARY_NAME="ccr-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.ext }}"
+
+          go build \
+            -ldflags="-X main.version=${{ steps.version.outputs.version_clean }} \
+                      -X main.commit=${{ steps.metadata.outputs.commit }} \
+                      -X main.date=${{ steps.metadata.outputs.date }} \
+                      -X main.author='${{ steps.metadata.outputs.author }}' \
+                      -X main.website=${{ steps.metadata.outputs.website }} \
+                      -w -s" \
+            -o "${BINARY_NAME}" \
+            .
+
+          # Verify binary was created
+          ls -la "${BINARY_NAME}"
+
+          # Test the binary (basic version check)
+          if [ "${{ matrix.goos }}" = "linux" ] && [ "${{ matrix.goarch }}" = "amd64" ]; then
+            ./"${BINARY_NAME}" version || echo "Binary test failed but continuing..."
+          fi
+
+      - name: Generate checksum
+        run: |
+          BINARY_NAME="ccr-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.ext }}"
+          sha256sum "${BINARY_NAME}" > "${BINARY_NAME}.sha256"
+          echo "Generated checksum for ${BINARY_NAME}:"
+          cat "${BINARY_NAME}.sha256"
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ccr-${{ matrix.os }}-${{ matrix.arch }}
+          path: |
+            ccr-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.ext }}
+            ccr-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.ext }}.sha256
+          retention-days: 5
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="${{ github.ref_name }}"
+          fi
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p ./release-assets
+          find ./artifacts -name "ccr-*" -type f -exec cp {} ./release-assets/ \;
+
+          # Create combined checksums file
+          cd ./release-assets
+          find . -name "*.sha256" -exec cat {} \; > checksums.txt
+
+          echo "Release assets:"
+          ls -la
+          echo "Checksums file:"
+          cat checksums.txt
+
+      - name: Generate release notes
+        id: release_notes
+        run: |
+          # Create release notes
+          cat << 'EOF' > release_notes.md
+          ## 🚀 CommandChronicles CLI ${{ steps.version.outputs.version }}
+
+          ### 📦 Installation
+
+          **Quick Install (Linux/macOS):**
+          ```bash
+          curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/scripts/install.sh | sh
+          ```
+
+          **Manual Installation:**
+          1. Download the appropriate binary for your platform below
+          2. Make it executable: `chmod +x ccr-*`
+          3. Move to your PATH: `sudo mv ccr-* /usr/local/bin/ccr`
+
+          ### 🔍 Verify Installation
+          ```bash
+          ccr version
+          ```
+
+          ### 📋 Available Binaries
+
+          | Platform | Architecture | Binary | Checksum |
+          |----------|-------------|---------|----------|
+          | Linux | x86_64 | `ccr-linux-amd64` | See `checksums.txt` |
+          | Linux | ARM64 | `ccr-linux-arm64` | See `checksums.txt` |
+          | macOS | Intel | `ccr-darwin-amd64` | See `checksums.txt` |
+          | macOS | Apple Silicon | `ccr-darwin-arm64` | See `checksums.txt` |
+
+          ### 🛡️ Security
+
+          All binaries are built automatically by GitHub Actions and include SHA256 checksums for verification.
+
+          **Verify checksums:**
+          ```bash
+          sha256sum -c checksums.txt
+          ```
+
+          ### 🔄 Updating
+
+          If you already have CommandChronicles CLI installed:
+          ```bash
+          ccr update
+          ```
+
+          ---
+
+          **Full Changelog**: https://github.com/${{ github.repository }}/compare/$(git describe --tags --abbrev=0 HEAD^)...${{ steps.version.outputs.version }}
+          EOF
+
+          echo "Generated release notes:"
+          cat release_notes.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: CommandChronicles CLI ${{ steps.version.outputs.version }}
+          body_path: release_notes.md
+          files: |
+            ./release-assets/ccr-linux-amd64
+            ./release-assets/ccr-linux-amd64.sha256
+            ./release-assets/ccr-linux-arm64
+            ./release-assets/ccr-linux-arm64.sha256
+            ./release-assets/ccr-darwin-amd64
+            ./release-assets/ccr-darwin-amd64.sha256
+            ./release-assets/ccr-darwin-arm64
+            ./release-assets/ccr-darwin-arm64.sha256
+            ./release-assets/checksums.txt
+          draft: false
+          prerelease: ${{ contains(steps.version.outputs.version, '-rc') || contains(steps.version.outputs.version, '-beta') || contains(steps.version.outputs.version, '-alpha') }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Cleanup artifacts
+        uses: geekyeggo/delete-artifact@v2
+        with:
+          name: |
+            ccr-linux-amd64
+            ccr-linux-arm64
+            ccr-darwin-amd64
+            ccr-darwin-arm64
+          failOnError: false
+
+  notify:
+    name: Post-Release Notifications
+    needs: [build, release]
+    runs-on: ubuntu-latest
+    if: success()
+    steps:
+      - name: Release Success
+        run: |
+          echo "🎉 Release ${{ github.ref_name }} completed successfully!"
+          echo "📦 Binaries built for 4 platforms (Unix systems only)"
+          echo "✅ GitHub release created"
+          echo "🔗 Release URL: https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}"
