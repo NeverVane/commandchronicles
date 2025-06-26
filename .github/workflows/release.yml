@@ -169,53 +169,154 @@ jobs:
         run: |
           # Create release notes
           cat << 'EOF' > release_notes.md
-          ## 🚀 CommandChronicles CLI ${{ steps.version.outputs.version }}
+          <div align="center">
 
-          ### 📦 Installation
+          # 🚀 CommandChronicles CLI ${{ steps.version.outputs.version }}
 
-          **Quick Install (Linux/macOS):**
+          **A modern shell history management tool with secure encryption and intelligent search**
+
+          [![Download](https://img.shields.io/badge/⬇️_Download-Latest_Release-blue?style=for-the-badge)](https://github.com/${{ github.repository }}/releases/latest)
+          [![Install](https://img.shields.io/badge/⚡_Quick_Install-One_Command-green?style=for-the-badge)](#-quick-installation)
+
+          </div>
+
+          ---
+
+          ## ✨ What's New in This Release
+
+          🔐 **Secure Command History Storage** - Military-grade XChaCha20-Poly1305 encryption
+          🔍 **Lightning-Fast Search** - Fuzzy search with interactive TUI interface
+          🔄 **Cross-Device Sync** - Perfect synchronization across all your devices
+          🐚 **Shell Integration** - Seamless hooks for bash, zsh, and fish
+          📊 **Rich Context** - Capture environment, git status, and metadata
+          🛡️ **Security First** - Argon2id key derivation and secure session management
+
+          ## 📦 Quick Installation
+
+          ### 🚀 One-Line Install (Recommended)
           ```bash
           curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/scripts/install.sh | sh
           ```
 
-          **Manual Installation:**
-          1. Download the appropriate binary for your platform below
-          2. Make it executable: `chmod +x ccr-*`
-          3. Move to your PATH: `sudo mv ccr-* /usr/local/bin/ccr`
+          ### 🔧 Manual Installation
+          1. **Download** the appropriate binary for your platform from the assets below
+          2. **Make executable**: `chmod +x ccr-*`
+          3. **Install**: `sudo mv ccr-* /usr/local/bin/ccr`
+          4. **Verify**: `ccr version`
 
-          ### 🔍 Verify Installation
+          ### 🍺 Homebrew (Coming Soon)
           ```bash
-          ccr version
+          brew install commandchronicles/tap/ccr
           ```
 
-          ### 📋 Available Binaries
+          ## 🏁 Quick Start
 
-          | Platform | Architecture | Binary | Checksum |
-          |----------|-------------|---------|----------|
-          | Linux | x86_64 | `ccr-linux-amd64` | See `checksums.txt` |
-          | Linux | ARM64 | `ccr-linux-arm64` | See `checksums.txt` |
-          | macOS | Intel | `ccr-darwin-amd64` | See `checksums.txt` |
-          | macOS | Apple Silicon | `ccr-darwin-arm64` | See `checksums.txt` |
-
-          ### 🛡️ Security
-
-          All binaries are built automatically by GitHub Actions and include SHA256 checksums for verification.
-
-          **Verify checksums:**
           ```bash
+          # Initialize CommandChronicles
+          ccr init
+
+          # Install shell hooks for automatic history capture
+          ccr install-hooks --auto
+
+          # Search your command history
+          ccr search "git commit"
+
+          # Launch interactive TUI (like enhanced Ctrl+R)
+          ccr tui
+          ```
+
+          ## 📋 Available Downloads
+
+          | Platform | Architecture | Binary | Size | Checksum |
+          |----------|-------------|---------|------|----------|
+          | 🐧 **Linux** | x86_64 | [`ccr-linux-amd64`](https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.version }}/ccr-linux-amd64) | ~15MB | [SHA256](https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.version }}/ccr-linux-amd64.sha256) |
+          | 🐧 **Linux** | ARM64 | [`ccr-linux-arm64`](https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.version }}/ccr-linux-arm64) | ~14MB | [SHA256](https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.version }}/ccr-linux-arm64.sha256) |
+          | 🍎 **macOS** | Intel | [`ccr-darwin-amd64`](https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.version }}/ccr-darwin-amd64) | ~15MB | [SHA256](https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.version }}/ccr-darwin-amd64.sha256) |
+          | 🍎 **macOS** | Apple Silicon | [`ccr-darwin-arm64`](https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.version }}/ccr-darwin-arm64) | ~14MB | [SHA256](https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.version }}/ccr-darwin-arm64.sha256) |
+
+          ### 🔐 Security Verification
+
+          **Verify checksums** (recommended):
+          ```bash
+          # Download checksums file
+          curl -L -O https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.version }}/checksums.txt
+
+          # Verify your downloaded binary
           sha256sum -c checksums.txt
           ```
 
-          ### 🔄 Updating
+          ## 🎯 Key Features
+
+          <details>
+          <summary><strong>🔒 Security & Privacy</strong></summary>
+
+          - **End-to-end encryption** with XChaCha20-Poly1305 AEAD
+          - **Argon2id key derivation** for password-based encryption
+          - **Local-first storage** - your data never leaves your devices
+          - **Secure session management** with automatic locking
+          - **File permission enforcement** (0600/0700) for data protection
+
+          </details>
+
+          <details>
+          <summary><strong>🔍 Search & Discovery</strong></summary>
+
+          - **Fuzzy search** with real-time filtering
+          - **Interactive TUI** with keyboard shortcuts
+          - **Metadata filtering** by date, directory, exit code, etc.
+          - **Intelligent ranking** based on frequency and recency
+          - **Regular expression support** for advanced queries
+
+          </details>
+
+          <details>
+          <summary><strong>🔄 Sync & Backup</strong></summary>
+
+          - **Perfect synchronization** across multiple devices
+          - **Conflict resolution** with merge strategies
+          - **Incremental sync** for bandwidth efficiency
+          - **Integrity verification** with cryptographic hashes
+          - **Import/export** from existing shell histories
+
+          </details>
+
+          ## 🔄 Updating
 
           If you already have CommandChronicles CLI installed:
+
           ```bash
+          # Using the built-in updater
           ccr update
+
+          # Or reinstall with the install script
+          curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/scripts/install.sh | sh
           ```
+
+          ## 🆘 Support & Documentation
+
+          - 📚 **[Documentation](https://github.com/${{ github.repository }}/blob/main/README.md)**
+          - 🐛 **[Report Issues](https://github.com/${{ github.repository }}/issues)**
+          - 💬 **[Discussions](https://github.com/${{ github.repository }}/discussions)**
+          - 🔧 **[Contributing Guide](https://github.com/${{ github.repository }}/blob/main/CONTRIBUTING.md)**
+
+          ## 🎉 What's Next?
+
+          - 🌐 **Web dashboard** for command analytics
+          - 📱 **Mobile app** for remote command execution
+          - 🤖 **AI-powered suggestions** based on your history
+          - 🔌 **Plugin system** for extensibility
 
           ---
 
+          <div align="center">
+
+          **Built with ❤️ by Leonardo Zanobi**
+
+          ⭐ **Star this repo if you find it useful!** ⭐
+
           **Full Changelog**: https://github.com/${{ github.repository }}/compare/$(git describe --tags --abbrev=0 HEAD^)...${{ steps.version.outputs.version }}
+
+          </div>
           EOF
 
           echo "Generated release notes:"
@@ -225,8 +326,10 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ steps.version.outputs.version }}
-          name: CommandChronicles CLI ${{ steps.version.outputs.version }}
+          name: "🚀 CommandChronicles CLI ${{ steps.version.outputs.version }} - Secure Shell History Management"
           body_path: release_notes.md
+          make_latest: true
+          discussion_category_name: "Releases"
           files: |
             ./release-assets/ccr-linux-amd64
             ./release-assets/ccr-linux-amd64.sha256
@@ -238,8 +341,9 @@ jobs:
             ./release-assets/ccr-darwin-arm64.sha256
             ./release-assets/checksums.txt
           draft: false
-          prerelease: ${{ contains(steps.version.outputs.version, '-rc') || contains(steps.version.outputs.version, '-beta') || contains(steps.version.outputs.version, '-alpha') }}
-          generate_release_notes: true
+          prerelease: ${{ contains(steps.version.outputs.version, '-rc') || contains(steps.version.outputs.version, '-beta') || contains(steps.version.outputs.version, '-alpha') || contains(steps.version.outputs.version, '-dev') }}
+          generate_release_notes: false
+          append_body: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -263,5 +367,7 @@ jobs:
         run: |
           echo "🎉 Release ${{ github.ref_name }} completed successfully!"
           echo "📦 Binaries built for 4 platforms (Unix systems only)"
-          echo "✅ GitHub release created"
+          echo "✅ GitHub release created with enhanced formatting"
           echo "🔗 Release URL: https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}"
+          echo "📊 Release features: Direct download links, security verification, quick start guide"
+          echo "🚀 Installation command: curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/scripts/install.sh | sh"
