@@ -103,8 +103,20 @@ jobs:
         run: |
           BINARY_NAME="ccr-${{ matrix.os }}-${{ matrix.arch }}"
 
+          # Check if signing identity is set
+          if [ -z "${{ secrets.APPLE_SIGNING_IDENTITY }}" ]; then
+            echo "❌ Error: APPLE_SIGNING_IDENTITY secret is not set!"
+            echo "Available signing identities on this system:"
+            security find-identity -v -p codesigning || echo "Could not list identities"
+            echo ""
+            echo "Please add APPLE_SIGNING_IDENTITY secret to your repository with a value like:"
+            echo "Developer ID Application: Your Name (TEAMID)"
+            exit 1
+          fi
+
           # Sign the binary
           echo "Signing macOS binary with Developer ID..."
+          echo "Using signing identity: ${{ secrets.APPLE_SIGNING_IDENTITY }}"
           codesign --force --options runtime --sign "${{ secrets.APPLE_SIGNING_IDENTITY }}" "${BINARY_NAME}"
 
           # Verify signature
