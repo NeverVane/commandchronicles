@@ -200,7 +200,6 @@ jobs:
           gh release create "${{ steps.version.outputs.version }}" \
             --title "🚀 CommandChronicles CLI ${{ steps.version.outputs.version }} - Secure Shell History Management" \
             --notes-file release_notes.md \
-            --discussion-category "Releases" \
             $PRERELEASE_FLAG \
             ./release-assets/ccr-linux-amd64 \
             ./release-assets/ccr-linux-amd64.sha256 \
@@ -220,11 +219,7 @@ jobs:
         if: always()
         uses: geekyeggo/delete-artifact@v2
         with:
-          name: |
-            ccr-linux-amd64
-            ccr-linux-arm64
-            ccr-darwin-amd64
-            ccr-darwin-arm64
+          name: ccr-*
           failOnError: false
 
   notify:
