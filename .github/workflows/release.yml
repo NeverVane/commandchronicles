@@ -76,16 +76,7 @@ jobs:
           echo "Building ${{ matrix.os }}/${{ matrix.arch }} binary with pure Go..."
 
           # Pure Go build - no CGO needed since we use modernc.org/sqlite
-          CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
-          go build \
-            -ldflags="-X main.version=${{ steps.version.outputs.version_clean }} \
-                      -X main.commit=${{ steps.metadata.outputs.commit }} \
-                      -X main.date=${{ steps.metadata.outputs.date }} \
-                      -X main.author='${{ steps.metadata.outputs.author }}' \
-                      -X main.website=${{ steps.metadata.outputs.website }} \
-                      -w -s" \
-            -o "${BINARY_NAME}" \
-            .
+          CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -ldflags="-X main.version=${{ steps.version.outputs.version_clean }} -X main.commit=${{ steps.metadata.outputs.commit }} -X main.date=${{ steps.metadata.outputs.date }} -X 'main.author=${{ steps.metadata.outputs.author }}' -X main.website=${{ steps.metadata.outputs.website }} -w -s" -o "${BINARY_NAME}" .
 
           # Verify binary was created
           ls -la "${BINARY_NAME}"
