@@ -18,7 +18,6 @@ permissions:
 jobs:
   build:
     name: Build Binaries
-    runs-on: ubuntu-latest
     strategy:
       matrix:
         include:
@@ -26,18 +25,23 @@ jobs:
             arch: amd64
             goos: linux
             goarch: amd64
+            runner: ubuntu-latest
           - os: linux
             arch: arm64
             goos: linux
             goarch: arm64
+            runner: ubuntu-latest
           - os: darwin
             arch: amd64
             goos: darwin
             goarch: amd64
+            runner: macos-latest
           - os: darwin
             arch: arm64
             goos: darwin
             goarch: arm64
+            runner: macos-latest
+    runs-on: ${{ matrix.runner }}
 
     steps:
       - name: Checkout code
@@ -75,6 +79,8 @@ jobs:
         with:
           p12-file-base64: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_P12_BASE64 }}
           p12-password: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_PASSWORD }}
+          keychain: signing_temp
+          create-keychain: true
 
       - name: Build binary
         run: |
@@ -99,7 +105,7 @@ jobs:
 
           # Sign the binary
           echo "Signing macOS binary with Developer ID..."
-          codesign --force --options runtime --sign "Developer ID Application: ${{ secrets.APPLE_TEAM_NAME }} (${{ secrets.APPLE_TEAM_ID }})" "${BINARY_NAME}"
+          codesign --force --options runtime --sign "${{ secrets.APPLE_SIGNING_IDENTITY }}" "${BINARY_NAME}"
 
           # Verify signature
           echo "Verifying signature..."
@@ -147,6 +153,8 @@ jobs:
     name: Create Release
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -226,10 +234,10 @@ jobs:
 
       - name: Create GitHub Release
         run: |
-          # Check if release already exists
+          # Check if release already exists and delete it
           if gh release view "${{ steps.version.outputs.version }}" > /dev/null 2>&1; then
-            echo "Release ${{ steps.version.outputs.version }} already exists, skipping creation"
-            exit 0
+            echo "Release ${{ steps.version.outputs.version }} already exists, deleting it"
+            gh release delete "${{ steps.version.outputs.version }}" --yes || true
           fi
 
           # Determine if this is a prerelease
@@ -239,19 +247,21 @@ jobs:
           fi
 
           # Create the release
+          echo "Creating release with assets from ./release-assets/"
+          cd ./release-assets
+          assets=""
+          for file in *; do
+            if [ -f "$file" ]; then
+              assets="$assets ./$file"
+            fi
+          done
+          cd ..
+
           gh release create "${{ steps.version.outputs.version }}" \
             --title "🚀 CommandChronicles CLI ${{ steps.version.outputs.version }} - Secure Shell History Management" \
             --notes-file release_notes.md \
             $PRERELEASE_FLAG \
-            ./release-assets/ccr-linux-amd64 \
-            ./release-assets/ccr-linux-amd64.sha256 \
-            ./release-assets/ccr-linux-arm64 \
-            ./release-assets/ccr-linux-arm64.sha256 \
-            ./release-assets/ccr-darwin-amd64 \
-            ./release-assets/ccr-darwin-amd64.sha256 \
-            ./release-assets/ccr-darwin-arm64 \
-            ./release-assets/ccr-darwin-arm64.sha256 \
-            ./release-assets/checksums.txt
+            $assets
 
           echo "✅ Release created successfully"
         env:
@@ -259,10 +269,9 @@ jobs:
 
       - name: Cleanup artifacts
         if: always()
-        uses: geekyeggo/delete-artifact@v2
-        with:
-          name: ccr-*
-          failOnError: false
+        run: |
+          echo "Cleaning up artifacts..."
+          # No need to delete artifacts as they'll expire automatically
 
   notify:
     name: Post-Release Notifications
