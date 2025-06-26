@@ -2,16 +2,16 @@
 
 ```
 ╔═══════════════════════════════════════════════════════════════════╗
-║                                          CommandChronicles CLI (ccr) v0.1.0                                    ║
-║                                                                                                                ║
-║                            🚀 A modern shell history management tool that supercharges                         ║
-║                                your command line experience with intelligent search                            ║
-║                                            and secure local storage                                            ║
+                                          CommandChronicles CLI (ccr) v0.1.0
+
+                            🚀 A modern shell history management tool that supercharges
+                                your command line experience with intelligent search
+                                            and secure local storage
 ╚═══════════════════════════════════════════════════════════════════╝
 ```
 
 <p align="center">
-  <a href="https://github.com/NeverVane/commandchronicles-cli/releases">
+  <a href="https://github.com/NeverVane/commandchronicles/releases">
     <img src="https://img.shields.io/badge/version-0.1.0-blue.svg" alt="Version">
   </a>
   <a href="LICENSE">
@@ -39,9 +39,16 @@
 ### Installation
 
 ```bash
+# One line install
+curl -sSL https://get.commandchronicles.dev | bash
+```
+
+#or
+
+```bash
 # Clone the repository
-git clone https://github.com/NeverVane/commandchronicles-cli.git
-cd commandchronicles-cli
+git clone https://github.com/NeverVane/commandchronicles.git
+cd commandchronicles
 
 # Build the binary
 go build -o ccr
@@ -62,6 +69,10 @@ ccr install-hooks --auto
 # Or manually install for specific shell
 ccr install-hooks zsh
 ccr install-hooks bash
+
+# Enable auto-sync daemon (recommended)
+ccr daemon-control install-service
+ccr daemon-control start
 ```
 
 After installation, restart your shell or run:
@@ -158,7 +169,7 @@ CommandChronicles stores its configuration in `~/.config/commandchronicles/confi
 
 ```toml
 [cache]
-hot_cache_size = 1000      # Number of recent commands to keep in memory
+hot_cache_size = 2000      # Number of recent commands to keep in memory
 search_batch_size = 5000   # Commands to load per search batch
 max_memory_mb = 100        # Maximum memory usage
 
@@ -184,7 +195,7 @@ CommandChronicles takes your privacy seriously:
 - All command history is encrypted using XChaCha20-Poly1305
 - Passwords are processed using Argon2id key derivation
 - Session keys are stored securely with configurable timeouts
-- All data is stored locally - no cloud services or telemetry
+- All data is stored locally - no cloud services or telemetry ( optional )
 - Secure memory handling prevents sensitive data from being swapped to disk
 
 ## 🤝 Contributing

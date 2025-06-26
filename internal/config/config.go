@@ -307,7 +307,7 @@ func DefaultConfig() *Config {
 			SyncMode:     "NORMAL",
 		},
 		Cache: CacheConfig{
-			HotCacheSize:       1000,
+			HotCacheSize:       2000,
 			SearchBatchSize:    5000,
 			MaxMemoryMB:        100,
 			RefreshInterval:    300, // 5 minutes

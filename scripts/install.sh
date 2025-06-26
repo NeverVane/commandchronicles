@@ -4,15 +4,15 @@
 # This script installs the latest version of CommandChronicles CLI
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/commandchronicles/cli/main/scripts/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/NeverVane/commandchronicles/main/scripts/install.sh | sh
 #
 # Or with custom options:
-#   curl -fsSL https://raw.githubusercontent.com/commandchronicles/cli/main/scripts/install.sh | sh -s -- --version v1.0.0 --install-dir /usr/local/bin
+#   curl -fsSL https://raw.githubusercontent.com/NeverVane/commandchronicles/main/scripts/install.sh | sh -s -- --version v1.0.0 --install-dir /usr/local/bin
 
 set -e
 
 # Default configuration
-GITHUB_REPO="commandchronicles/cli"
+GITHUB_REPO="NeverVane/commandchronicles"
 INSTALL_DIR=""
 VERSION=""
 BINARY_NAME="ccr"
@@ -97,13 +97,13 @@ OPTIONS:
 
 EXAMPLES:
     # Install latest version
-    curl -fsSL https://raw.githubusercontent.com/commandchronicles/cli/main/scripts/install.sh | sh
+    curl -fsSL https://raw.githubusercontent.com/NeverVane/commandchronicles/main/scripts/install.sh | sh
 
     # Install specific version
-    curl -fsSL https://raw.githubusercontent.com/commandchronicles/cli/main/scripts/install.sh | sh -s -- --version v1.0.0
+    curl -fsSL https://raw.githubusercontent.com/NeverVane/commandchronicles/main/scripts/install.sh | sh -s -- --version v1.0.0
 
     # Install to custom directory
-    curl -fsSL https://raw.githubusercontent.com/commandchronicles/cli/main/scripts/install.sh | sh -s -- --install-dir ~/.local/bin
+    curl -fsSL https://raw.githubusercontent.com/NeverVane/commandchronicles/main/scripts/install.sh | sh -s -- --install-dir ~/.local/bin
 
 Note: This installer supports Unix systems only (Linux and macOS). Windows is not supported.
 
