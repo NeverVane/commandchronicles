@@ -69,6 +69,13 @@ jobs:
           echo "author=Leonardo Zanobi" >> $GITHUB_OUTPUT
           echo "website=https://commandchronicles.dev" >> $GITHUB_OUTPUT
 
+      - name: Import Apple Developer Certificate
+        if: matrix.os == 'darwin'
+        uses: apple-actions/import-codesign-certs@v1
+        with:
+          p12-file-base64: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_P12_BASE64 }}
+          p12-password: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_PASSWORD }}
+
       - name: Build binary
         run: |
           BINARY_NAME="ccr-${{ matrix.os }}-${{ matrix.arch }}"
@@ -84,6 +91,41 @@ jobs:
 
           # Show binary info
           echo "Binary size: $(du -h ${BINARY_NAME} | cut -f1)"
+
+      - name: Sign and Notarize macOS Binary
+        if: matrix.os == 'darwin'
+        run: |
+          BINARY_NAME="ccr-${{ matrix.os }}-${{ matrix.arch }}"
+
+          # Sign the binary
+          echo "Signing macOS binary with Developer ID..."
+          codesign --force --options runtime --sign "Developer ID Application: ${{ secrets.APPLE_TEAM_NAME }} (${{ secrets.APPLE_TEAM_ID }})" "${BINARY_NAME}"
+
+          # Verify signature
+          echo "Verifying signature..."
+          codesign -vvv --deep --strict "${BINARY_NAME}"
+
+          # Prepare for notarization
+          echo "Preparing for notarization..."
+          ditto -c -k --keepParent "${BINARY_NAME}" "${BINARY_NAME}.zip"
+
+          # Notarize with Apple
+          echo "Submitting for notarization (this may take a few minutes)..."
+          xcrun notarytool submit "${BINARY_NAME}.zip" \
+            --apple-id "${{ secrets.APPLE_ID }}" \
+            --password "${{ secrets.APPLE_APP_PASSWORD }}" \
+            --team-id "${{ secrets.APPLE_TEAM_ID }}" \
+            --wait
+
+          # Staple the notarization ticket
+          echo "Stapling notarization ticket..."
+          xcrun stapler staple "${BINARY_NAME}"
+
+          # Verify stapling
+          echo "Verifying stapled notarization..."
+          xcrun stapler validate "${BINARY_NAME}"
+
+          echo "macOS code signing and notarization completed successfully!"
 
       - name: Generate checksum
         run: |
