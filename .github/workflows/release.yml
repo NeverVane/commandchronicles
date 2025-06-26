@@ -306,14 +306,14 @@ jobs:
 
           # Create the release
           echo "Creating release with assets from ./release-assets/"
-          cd ./release-assets
           assets=""
-          for file in *; do
+          for file in ./release-assets/*; do
             if [ -f "$file" ]; then
-              assets="$assets ./$file"
+              assets="$assets $file"
             fi
           done
-          cd ..
+
+          echo "Assets to upload: $assets"
 
           gh release create "${{ steps.version.outputs.version }}" \
             --title "🚀 CommandChronicles CLI ${{ steps.version.outputs.version }} - Secure Shell History Management" \
