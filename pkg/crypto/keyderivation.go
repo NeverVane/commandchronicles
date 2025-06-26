@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"golang.org/x/crypto/argon2"
-	"github.com/NeverVane/commandchronicles-cli/internal/logger"
+	"github.com/NeverVane/commandchronicles/internal/logger"
 )
 
 // Argon2id parameters optimized for security vs performance

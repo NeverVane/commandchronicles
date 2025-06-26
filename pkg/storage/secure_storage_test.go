@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NeverVane/commandchronicles-cli/internal/config"
-	"github.com/NeverVane/commandchronicles-cli/internal/storage"
+	"github.com/NeverVane/commandchronicles/internal/config"
+	"github.com/NeverVane/commandchronicles/internal/storage"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

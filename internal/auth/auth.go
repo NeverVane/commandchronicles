@@ -11,11 +11,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/NeverVane/commandchronicles-cli/internal/config"
-	"github.com/NeverVane/commandchronicles-cli/internal/logger"
-	"github.com/NeverVane/commandchronicles-cli/internal/sentry"
-	"github.com/NeverVane/commandchronicles-cli/internal/storage"
-	"github.com/NeverVane/commandchronicles-cli/pkg/crypto"
+	"github.com/NeverVane/commandchronicles/internal/config"
+	"github.com/NeverVane/commandchronicles/internal/logger"
+	"github.com/NeverVane/commandchronicles/internal/sentry"
+	"github.com/NeverVane/commandchronicles/internal/storage"
+	"github.com/NeverVane/commandchronicles/pkg/crypto"
 	"golang.org/x/crypto/argon2"
 	"golang.org/x/crypto/chacha20poly1305"
 )

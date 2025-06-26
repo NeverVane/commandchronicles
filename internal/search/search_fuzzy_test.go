@@ -7,10 +7,10 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/NeverVane/commandchronicles-cli/internal/cache"
-	"github.com/NeverVane/commandchronicles-cli/internal/config"
-	"github.com/NeverVane/commandchronicles-cli/internal/storage"
-	securestorage "github.com/NeverVane/commandchronicles-cli/pkg/storage"
+	"github.com/NeverVane/commandchronicles/internal/cache"
+	"github.com/NeverVane/commandchronicles/internal/config"
+	"github.com/NeverVane/commandchronicles/internal/storage"
+	securestorage "github.com/NeverVane/commandchronicles/pkg/storage"
 )
 
 func TestSearchService_InitializeWithFuzzySearch(t *testing.T) {

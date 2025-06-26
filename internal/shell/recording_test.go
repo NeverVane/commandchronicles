@@ -9,8 +9,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/NeverVane/commandchronicles-cli/internal/config"
-	"github.com/NeverVane/commandchronicles-cli/internal/storage"
+	"github.com/NeverVane/commandchronicles/internal/config"
+	"github.com/NeverVane/commandchronicles/internal/storage"
 )
 
 func TestSessionManager_GetCurrentSessionID(t *testing.T) {

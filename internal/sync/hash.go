@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 	
-	"github.com/NeverVane/commandchronicles-cli/internal/storage"
+	"github.com/NeverVane/commandchronicles/internal/storage"
 )
 
 // HashGenerator creates deterministic hashes for command records

@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"golang.org/x/crypto/chacha20poly1305"
-	"github.com/NeverVane/commandchronicles-cli/internal/logger"
-	"github.com/NeverVane/commandchronicles-cli/internal/storage"
+	"github.com/NeverVane/commandchronicles/internal/logger"
+	"github.com/NeverVane/commandchronicles/internal/storage"
 )
 
 // Encryption constants

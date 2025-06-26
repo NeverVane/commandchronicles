@@ -25,8 +25,8 @@ import (
 	"time"
 
 	"github.com/Masterminds/semver/v3"
-	"github.com/NeverVane/commandchronicles-cli/internal/config"
-	"github.com/NeverVane/commandchronicles-cli/internal/logger"
+	"github.com/NeverVane/commandchronicles/internal/config"
+	"github.com/NeverVane/commandchronicles/internal/logger"
 )
 
 // UpdateInfo represents information about an available update

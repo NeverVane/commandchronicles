@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/NeverVane/commandchronicles-cli/internal/config"
+	"github.com/NeverVane/commandchronicles/internal/config"
 )
 
 // ColorFormatter handles colored output based on configuration

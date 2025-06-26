@@ -6,11 +6,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/NeverVane/commandchronicles-cli/internal/cache"
-	"github.com/NeverVane/commandchronicles-cli/internal/config"
-	"github.com/NeverVane/commandchronicles-cli/internal/logger"
-	"github.com/NeverVane/commandchronicles-cli/internal/storage"
-	securestorage "github.com/NeverVane/commandchronicles-cli/pkg/storage"
+	"github.com/NeverVane/commandchronicles/internal/cache"
+	"github.com/NeverVane/commandchronicles/internal/config"
+	"github.com/NeverVane/commandchronicles/internal/logger"
+	"github.com/NeverVane/commandchronicles/internal/storage"
+	securestorage "github.com/NeverVane/commandchronicles/pkg/storage"
 )
 
 // SearchService provides high-level search functionality using the hybrid cache

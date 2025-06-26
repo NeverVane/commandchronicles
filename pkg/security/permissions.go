@@ -9,7 +9,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/NeverVane/commandchronicles-cli/internal/logger"
+	"github.com/NeverVane/commandchronicles/internal/logger"
 )
 
 // File permission constants for secure operation

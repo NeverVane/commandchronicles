@@ -18,16 +18,16 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"golang.org/x/term"
 
-	"github.com/NeverVane/commandchronicles-cli/internal/auth"
-	"github.com/NeverVane/commandchronicles-cli/internal/cache"
-	"github.com/NeverVane/commandchronicles-cli/internal/config"
-	"github.com/NeverVane/commandchronicles-cli/internal/deletion"
-	"github.com/NeverVane/commandchronicles-cli/internal/logger"
-	"github.com/NeverVane/commandchronicles-cli/internal/search"
-	"github.com/NeverVane/commandchronicles-cli/internal/sentry"
-	"github.com/NeverVane/commandchronicles-cli/internal/stats"
-	"github.com/NeverVane/commandchronicles-cli/internal/storage"
-	securestorage "github.com/NeverVane/commandchronicles-cli/pkg/storage"
+	"github.com/NeverVane/commandchronicles/internal/auth"
+	"github.com/NeverVane/commandchronicles/internal/cache"
+	"github.com/NeverVane/commandchronicles/internal/config"
+	"github.com/NeverVane/commandchronicles/internal/deletion"
+	"github.com/NeverVane/commandchronicles/internal/logger"
+	"github.com/NeverVane/commandchronicles/internal/search"
+	"github.com/NeverVane/commandchronicles/internal/sentry"
+	"github.com/NeverVane/commandchronicles/internal/stats"
+	"github.com/NeverVane/commandchronicles/internal/storage"
+	securestorage "github.com/NeverVane/commandchronicles/pkg/storage"
 )
 
 // TUIOptions configures the TUI behavior

@@ -13,8 +13,8 @@ import (
 	"github.com/blevesearch/bleve/v2/search"
 	"github.com/blevesearch/bleve/v2/search/query"
 
-	"github.com/NeverVane/commandchronicles-cli/internal/logger"
-	"github.com/NeverVane/commandchronicles-cli/internal/storage"
+	"github.com/NeverVane/commandchronicles/internal/logger"
+	"github.com/NeverVane/commandchronicles/internal/storage"
 )
 
 // FuzzySearchEngine provides fuzzy search capabilities using Bleve

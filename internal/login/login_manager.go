@@ -7,12 +7,12 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/NeverVane/commandchronicles-cli/internal/auth"
-	"github.com/NeverVane/commandchronicles-cli/internal/config"
-	"github.com/NeverVane/commandchronicles-cli/internal/daemon"
-	"github.com/NeverVane/commandchronicles-cli/internal/logger"
-	"github.com/NeverVane/commandchronicles-cli/internal/sync"
-	securestorage "github.com/NeverVane/commandchronicles-cli/pkg/storage"
+	"github.com/NeverVane/commandchronicles/internal/auth"
+	"github.com/NeverVane/commandchronicles/internal/config"
+	"github.com/NeverVane/commandchronicles/internal/daemon"
+	"github.com/NeverVane/commandchronicles/internal/logger"
+	"github.com/NeverVane/commandchronicles/internal/sync"
+	securestorage "github.com/NeverVane/commandchronicles/pkg/storage"
 )
 
 // StatusCallback is a function type for reporting status updates during operations

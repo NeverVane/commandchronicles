@@ -7,9 +7,9 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/NeverVane/commandchronicles-cli/internal/config"
-	"github.com/NeverVane/commandchronicles-cli/internal/storage"
-	secureStorage "github.com/NeverVane/commandchronicles-cli/pkg/storage"
+	"github.com/NeverVane/commandchronicles/internal/config"
+	"github.com/NeverVane/commandchronicles/internal/storage"
+	secureStorage "github.com/NeverVane/commandchronicles/pkg/storage"
 )
 
 func createTestConfig(tmpDir string) *config.Config {

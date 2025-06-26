@@ -247,9 +247,9 @@ go test ./pkg/security -v
 
 ## Dependencies
 
-- `github.com/NeverVane/commandchronicles-cli/internal/logger` - Structured logging
-- `github.com/NeverVane/commandchronicles-cli/pkg/crypto` - Crypto system integration
-- `github.com/NeverVane/commandchronicles-cli/internal/storage` - Data structures
+- `github.com/NeverVane/commandchronicles/internal/logger` - Structured logging
+- `github.com/NeverVane/commandchronicles/pkg/crypto` - Crypto system integration
+- `github.com/NeverVane/commandchronicles/internal/storage` - Data structures
 
 ## Thread Safety
 

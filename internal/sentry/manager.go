@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/NeverVane/commandchronicles-cli/internal/config"
-	"github.com/NeverVane/commandchronicles-cli/internal/logger"
+	"github.com/NeverVane/commandchronicles/internal/config"
+	"github.com/NeverVane/commandchronicles/internal/logger"
 	"github.com/rs/zerolog"
 )
 

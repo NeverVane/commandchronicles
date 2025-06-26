@@ -9,12 +9,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/NeverVane/commandchronicles-cli/internal/auth"
-	"github.com/NeverVane/commandchronicles-cli/internal/config"
-	"github.com/NeverVane/commandchronicles-cli/internal/logger"
-	"github.com/NeverVane/commandchronicles-cli/internal/storage"
-	"github.com/NeverVane/commandchronicles-cli/pkg/crypto"
-	"github.com/NeverVane/commandchronicles-cli/pkg/security"
+	"github.com/NeverVane/commandchronicles/internal/auth"
+	"github.com/NeverVane/commandchronicles/internal/config"
+	"github.com/NeverVane/commandchronicles/internal/logger"
+	"github.com/NeverVane/commandchronicles/internal/storage"
+	"github.com/NeverVane/commandchronicles/pkg/crypto"
+	"github.com/NeverVane/commandchronicles/pkg/security"
 )
 
 // DeviceIDProvider interface for dependency injection

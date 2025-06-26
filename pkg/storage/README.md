@@ -47,8 +47,8 @@ SecureStorage
 package main
 
 import (
-    "github.com/NeverVane/commandchronicles-cli/internal/config"
-    "github.com/NeverVane/commandchronicles-cli/pkg/storage"
+    "github.com/NeverVane/commandchronicles/internal/config"
+    "github.com/NeverVane/commandchronicles/pkg/storage"
 )
 
 func main() {

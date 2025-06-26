@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/NeverVane/commandchronicles-cli/internal/logger"
-	"github.com/NeverVane/commandchronicles-cli/internal/storage"
+	"github.com/NeverVane/commandchronicles/internal/logger"
+	"github.com/NeverVane/commandchronicles/internal/storage"
 )
 
 // ContextCapture handles capturing rich context for command records

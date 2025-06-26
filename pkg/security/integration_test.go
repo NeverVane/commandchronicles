@@ -8,8 +8,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/NeverVane/commandchronicles-cli/pkg/crypto"
-	"github.com/NeverVane/commandchronicles-cli/internal/storage"
+	"github.com/NeverVane/commandchronicles/pkg/crypto"
+	"github.com/NeverVane/commandchronicles/internal/storage"
 )
 
 func TestPermissionCryptoIntegration(t *testing.T) {

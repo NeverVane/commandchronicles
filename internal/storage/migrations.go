@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/NeverVane/commandchronicles-cli/internal/logger"
+	"github.com/NeverVane/commandchronicles/internal/logger"
 )
 
 // Migrator handles database schema migrations

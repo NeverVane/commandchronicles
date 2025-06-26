@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NeverVane/commandchronicles-cli/internal/config"
-	"github.com/NeverVane/commandchronicles-cli/internal/storage"
+	"github.com/NeverVane/commandchronicles/internal/config"
+	"github.com/NeverVane/commandchronicles/internal/storage"
 )
 
 func BenchmarkFuzzySearchEngine_IndexCommands(b *testing.B) {

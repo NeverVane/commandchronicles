@@ -3,8 +3,8 @@ package sync
 import (
 	"fmt"
 	
-	"github.com/NeverVane/commandchronicles-cli/internal/logger"
-	"github.com/NeverVane/commandchronicles-cli/internal/storage"
+	"github.com/NeverVane/commandchronicles/internal/logger"
+	"github.com/NeverVane/commandchronicles/internal/storage"
 )
 
 type ConflictResolver struct {

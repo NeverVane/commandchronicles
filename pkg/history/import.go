@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/NeverVane/commandchronicles-cli/internal/storage"
-	secureStorage "github.com/NeverVane/commandchronicles-cli/pkg/storage"
+	"github.com/NeverVane/commandchronicles/internal/storage"
+	secureStorage "github.com/NeverVane/commandchronicles/pkg/storage"
 )
 
 // ImportOptions contains options for history import operations

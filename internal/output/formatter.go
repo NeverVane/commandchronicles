@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/NeverVane/commandchronicles-cli/internal/config"
+	"github.com/NeverVane/commandchronicles/internal/config"
 )
 
 // Formatter provides a high-level interface for CLI output formatting
