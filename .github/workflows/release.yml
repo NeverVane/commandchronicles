@@ -190,7 +190,11 @@ jobs:
       - name: Generate checksum
         run: |
           BINARY_NAME="ccr-${{ matrix.os }}-${{ matrix.arch }}"
-          sha256sum "${BINARY_NAME}" > "${BINARY_NAME}.sha256"
+          if [[ "${{ matrix.os }}" == "darwin" ]]; then
+            shasum -a 256 "${BINARY_NAME}" > "${BINARY_NAME}.sha256"
+          else
+            sha256sum "${BINARY_NAME}" > "${BINARY_NAME}.sha256"
+          fi
           echo "Generated checksum for ${BINARY_NAME}:"
           cat "${BINARY_NAME}.sha256"
 
