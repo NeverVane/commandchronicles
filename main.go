@@ -3750,44 +3750,45 @@ Example:
 			defer cancel()
 
 			// Check for updates
-			fmt.Print("🔍 Checking for updates... ")
+			formatter.Info("Checking for updates...")
 			updateInfo, err := u.CheckForUpdate(ctx)
 			if err != nil {
-				fmt.Printf("❌ Failed\n")
+				formatter.Error("Failed to check for updates")
 				return fmt.Errorf("failed to check for updates: %w", err)
 			}
 
 			if updateInfo == nil && !force {
-				fmt.Printf("✅ You're already running the latest version (%s)\n", version)
+				formatter.Success("You're already running the latest version (%s)", version)
 				return nil
 			}
 
 			if updateInfo != nil {
-				fmt.Printf("✅ Found\n")
-				fmt.Printf("\n🎉 New version available!\n")
-				fmt.Printf("   Current: %s\n", version)
-				fmt.Printf("   Latest:  %s\n", updateInfo.Version)
-				fmt.Printf("   Size:    %.1f MB\n", float64(updateInfo.AssetSize)/(1024*1024))
-				fmt.Printf("   Date:    %s\n", updateInfo.ReleaseDate.Format("2006-01-02"))
+				formatter.Success("Update found")
+				formatter.Separator()
+				formatter.Info("New version available!")
+				formatter.Info("   Current: %s", version)
+				formatter.Info("   Latest:  %s", updateInfo.Version)
+				formatter.Info("   Size:    %.1f MB", float64(updateInfo.AssetSize)/(1024*1024))
+				formatter.Info("   Date:    %s", updateInfo.ReleaseDate.Format("2006-01-02"))
 
 				if updateInfo.Critical {
-					fmt.Printf("   🚨 CRITICAL UPDATE - Security fix included\n")
+					formatter.Warning("   CRITICAL UPDATE - Security fix included")
 				}
 
 				if updateInfo.PreRelease {
-					fmt.Printf("   ⚠️  Pre-release version\n")
+					formatter.Warning("   Pre-release version")
 				}
 
 				if updateInfo.Changelog != "" {
-					fmt.Printf("\n📝 Release Notes:\n")
+					formatter.Info("Release Notes:")
 					lines := strings.Split(updateInfo.Changelog, "\n")
 					for i, line := range lines {
 						if i >= 10 { // Limit to first 10 lines
-							fmt.Printf("   ... (view full notes at GitHub)\n")
+							formatter.Info("   ... (view full notes at GitHub)")
 							break
 						}
 						if strings.TrimSpace(line) != "" {
-							fmt.Printf("   %s\n", line)
+							formatter.Info("   %s", line)
 						}
 					}
 				}
@@ -3814,7 +3815,8 @@ Example:
 			}
 
 			// Perform update
-			fmt.Printf("\n🚀 Starting update process...\n")
+			formatter.Separator()
+			formatter.Info("Starting update process...")
 			if err := u.Update(ctx, updateInfo); err != nil {
 				return fmt.Errorf("update failed: %w", err)
 			}
@@ -3848,6 +3850,13 @@ Example:
   ccr check-update              # Check for updates
   ccr check-update --pre        # Include pre-release versions`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			verbose, _ := cmd.Flags().GetBool("verbose")
+			noColor, _ := cmd.Flags().GetBool("no-color")
+
+			// Create formatter for colored output
+			formatter := output.NewFormatter(cfg)
+			formatter.SetFlags(verbose, false, noColor)
+
 			includePre, _ := cmd.Flags().GetBool("pre")
 			repoOwner, _ := cmd.Flags().GetString("repo-owner")
 			repoName, _ := cmd.Flags().GetString("repo-name")
@@ -3869,52 +3878,55 @@ Example:
 			defer cancel()
 
 			// Check for updates
-			fmt.Print("🔍 Checking for updates... ")
+			formatter.Info("Checking for updates...")
 			updateInfo, err := u.CheckForUpdate(ctx)
 			if err != nil {
-				fmt.Printf("❌ Failed\n")
+				formatter.Error("Failed to check for updates")
 				return fmt.Errorf("failed to check for updates: %w", err)
 			}
 
 			if updateInfo == nil {
-				fmt.Printf("✅ Up to date\n")
-				fmt.Printf("\n✨ You're running the latest version (%s)\n", version)
+				formatter.Success("Up to date")
+				formatter.Separator()
+				formatter.Success("You're running the latest version (%s)", version)
 				return nil
 			}
 
 			// Skip pre-releases unless explicitly requested
 			if updateInfo.PreRelease && !includePre {
-				fmt.Printf("✅ Up to date\n")
-				fmt.Printf("\n✨ You're running the latest stable version (%s)\n", version)
-				fmt.Printf("💡 Use --pre flag to include pre-release versions\n")
+				formatter.Success("Up to date")
+				formatter.Separator()
+				formatter.Success("You're running the latest stable version (%s)", version)
+				formatter.Tip("Use --pre flag to include pre-release versions")
 				return nil
 			}
 
-			fmt.Printf("✅ Update available\n")
-			fmt.Printf("\n🎉 New version available!\n")
-			fmt.Printf("   Current: %s\n", version)
-			fmt.Printf("   Latest:  %s\n", updateInfo.Version)
-			fmt.Printf("   Size:    %.1f MB\n", float64(updateInfo.AssetSize)/(1024*1024))
-			fmt.Printf("   Date:    %s\n", updateInfo.ReleaseDate.Format("2006-01-02"))
+			formatter.Success("Update available")
+			formatter.Separator()
+			formatter.Info("New version available!")
+			formatter.Info("   Current: %s", version)
+			formatter.Info("   Latest:  %s", updateInfo.Version)
+			formatter.Info("   Size:    %.1f MB", float64(updateInfo.AssetSize)/(1024*1024))
+			formatter.Info("   Date:    %s", updateInfo.ReleaseDate.Format("2006-01-02"))
 
 			if updateInfo.Critical {
-				fmt.Printf("   🚨 CRITICAL UPDATE - Security fix included\n")
+				formatter.Warning("   CRITICAL UPDATE - Security fix included")
 			}
 
 			if updateInfo.PreRelease {
-				fmt.Printf("   ⚠️  Pre-release version\n")
+				formatter.Warning("   Pre-release version")
 			}
 
 			if updateInfo.Changelog != "" {
-				fmt.Printf("\n📝 Release Notes:\n")
+				formatter.Info("Release Notes:")
 				lines := strings.Split(updateInfo.Changelog, "\n")
 				for i, line := range lines {
 					if i >= 15 { // Show more lines for check-only
-						fmt.Printf("   ... (view full notes at GitHub)\n")
+						formatter.Info("   ... (view full notes at GitHub)")
 						break
 					}
 					if strings.TrimSpace(line) != "" {
-						fmt.Printf("   %s\n", line)
+						formatter.Info("   %s", line)
 					}
 				}
 			}
@@ -3926,8 +3938,8 @@ Example:
 	}
 
 	cmd.Flags().Bool("pre", false, "Include pre-release versions")
-	cmd.Flags().String("repo-owner", "commandchronicles", "GitHub repository owner")
-	cmd.Flags().String("repo-name", "cli", "GitHub repository name")
+	cmd.Flags().String("repo-owner", "NeverVane", "GitHub repository owner")
+	cmd.Flags().String("repo-name", "commandchronicles", "GitHub repository name")
 
 	return cmd
 }
@@ -3975,12 +3987,17 @@ func checkAutoUpdate(cfg *config.Config) {
 		}
 
 		if updateInfo != nil {
-			// Show non-intrusive notification
+			// Show non-intrusive notification using formatter
+			formatter := output.NewFormatter(cfg)
+			formatter.SetFlags(false, false, false) // Default settings for background notification
+
 			if updateInfo.Critical {
-				fmt.Fprintf(os.Stderr, "\n🚨 CRITICAL UPDATE AVAILABLE: v%s\n", updateInfo.Version)
-				fmt.Fprintf(os.Stderr, "   Security fix - Run 'ccr update' immediately\n\n")
+				formatter.Warning("CRITICAL UPDATE AVAILABLE: v%s", updateInfo.Version)
+				formatter.Warning("   Security fix - Run 'ccr update' immediately")
+				fmt.Fprintf(os.Stderr, "\n")
 			} else {
-				fmt.Fprintf(os.Stderr, "\n💡 Update available: v%s - Run 'ccr update' to upgrade\n\n", updateInfo.Version)
+				formatter.Info("Update available: v%s - Run 'ccr update' to upgrade", updateInfo.Version)
+				fmt.Fprintf(os.Stderr, "\n")
 			}
 		}
 	}()
