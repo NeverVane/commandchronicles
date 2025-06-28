@@ -35,9 +35,9 @@ import (
 	"github.com/NeverVane/commandchronicles/pkg/security"
 	securestorage "github.com/NeverVane/commandchronicles/pkg/storage"
 	"github.com/charmbracelet/lipgloss"
-	_ "modernc.org/sqlite"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
+	_ "modernc.org/sqlite"
 )
 
 var (
@@ -3956,8 +3956,8 @@ func checkAutoUpdate(cfg *config.Config) {
 
 		// Create updater with default GitHub repository
 		updaterConfig := updater.UpdaterConfig{
-			RepoOwner:   "commandchronicles", // Default - can be made configurable
-			RepoName:    "cli",               // Default - can be made configurable
+			RepoOwner:   "NeverVane",
+			RepoName:    "commandchronicles",
 			GithubToken: os.Getenv("GITHUB_TOKEN"),
 			Timeout:     10 * time.Second, // Short timeout for background check
 		}
