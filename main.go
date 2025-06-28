@@ -3831,8 +3831,8 @@ Example:
 
 	cmd.Flags().Bool("force", false, "Force update even if no newer version is available")
 	cmd.Flags().Bool("check-only", false, "Only check for updates, don't install")
-	cmd.Flags().String("repo-owner", "commandchronicles", "GitHub repository owner")
-	cmd.Flags().String("repo-name", "cli", "GitHub repository name")
+	cmd.Flags().String("repo-owner", "NeverVane", "GitHub repository owner")
+	cmd.Flags().String("repo-name", "commandchronicles", "GitHub repository name")
 
 	return cmd
 }
