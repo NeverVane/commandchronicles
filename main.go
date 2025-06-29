@@ -671,6 +671,7 @@ func statusCmd(cfg *config.Config) *cobra.Command {
 			} else {
 				formatter.Println("Remote Sync:      Not configured")
 				formatter.Tip("Run 'ccr login --setup-sync' to enable remote sync")
+				formatter.Info("Purchase subscription: https://commandchronicles.dev/pricing")
 			}
 
 			formatter.Separator()
@@ -2647,6 +2648,7 @@ func promptAndEnableSync(cfg *config.Config, formatter *output.Formatter) {
 	formatter.Setup("Background Synchronization")
 	formatter.Info("Enable background sync to keep your commands synchronized across devices.")
 	formatter.Warning("Note: A subscription is required for sync functionality.")
+	formatter.Info("Purchase subscription: https://commandchronicles.dev/pricing")
 	formatter.Info("Learn more at: https://commandchronicles.dev")
 
 	fmt.Print("Enable background synchronization? [Y/n]: ")
@@ -2656,6 +2658,7 @@ func promptAndEnableSync(cfg *config.Config, formatter *output.Formatter) {
 	if response == "" || strings.ToLower(response) == "y" || strings.ToLower(response) == "yes" {
 		if cfg.Sync.Email == "" {
 			formatter.Warning("Sync not configured. Use 'ccr login --setup-sync' to configure sync.")
+			formatter.Info("Purchase subscription: https://commandchronicles.dev/pricing")
 			return
 		}
 
@@ -3129,7 +3132,10 @@ func syncCmd(cfg *config.Config) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "sync",
 		Short: "Manage command history synchronization",
-		Long:  "Configure and control synchronization of command history across devices",
+		Long: `Configure and control synchronization of command history across devices.
+
+Note: Synchronization requires a premium subscription.
+Purchase at: https://commandchronicles.dev/pricing`,
 	}
 
 	cmd.AddCommand(syncRegisterCmd(cfg))
@@ -3407,6 +3413,7 @@ func syncStatusCmd(cfg *config.Config) *cobra.Command {
 			if !cfg.Sync.Enabled {
 				formatter.Error("Sync: Disabled")
 				formatter.Tip("Use 'ccr sync enable' to enable synchronization")
+				formatter.Info("Purchase subscription: https://commandchronicles.dev/pricing")
 				return nil
 			}
 
@@ -3482,6 +3489,7 @@ func syncNowCmd(cfg *config.Config) *cobra.Command {
 			if !cfg.Sync.Enabled {
 				formatter.Error("Sync is not enabled")
 				formatter.Tip("Use 'ccr sync enable' first")
+				formatter.Info("Purchase subscription: https://commandchronicles.dev/pricing")
 				return fmt.Errorf("sync not enabled")
 			}
 
