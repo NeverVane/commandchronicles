@@ -251,19 +251,14 @@ jobs:
       - name: Generate release notes
         id: release_notes
         run: |
-          # Create release notes
-          cat << 'EOF' > release_notes.md
-          ## CommandChronicles CLI ${{ steps.version.outputs.version }}
+          # Get the git tag message
+          TAG_MESSAGE=$(git tag -l --format='%(contents)' ${{ steps.version.outputs.version }})
 
-          Initial public release of CommandChronicles - a modern shell history management tool with secure encryption and intelligent search.
+          # Create release notes with tag message and standard sections
+          cat << EOF > release_notes.md
+          ## ccr ${{ steps.version.outputs.version }}
 
-          ### ✨ Key Features
-
-          - 🔐 **Secure Storage** - XChaCha20-Poly1305 encryption with Argon2id key derivation
-          - 🔍 **Smart Search** - Fuzzy search with interactive TUI
-          - 🔄 **Cross-Device Sync** - Synchronization across multiple devices
-          - 🐚 **Shell Integration** - Support for bash, zsh, and fish
-          - 📊 **Rich Context** - Capture environment, git status, and metadata
+          ${TAG_MESSAGE}
 
           ### 📦 Binaries
 
