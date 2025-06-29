@@ -485,8 +485,8 @@ func (u *Updater) replaceExecutable(newBinaryPath string) error {
 		}
 	}()
 
-	// Replace the executable
-	if err := u.copyFile(newBinaryPath, currentExe); err != nil {
+	// Use atomic replacement to avoid "text file busy" error
+	if err := u.atomicReplaceFile(newBinaryPath, currentExe); err != nil {
 		// Restore from backup on failure
 		if restoreErr := u.copyFile(backupPath, currentExe); restoreErr != nil {
 			u.logger.Error().Err(restoreErr).Msg("Failed to restore backup after update failure")
@@ -494,6 +494,79 @@ func (u *Updater) replaceExecutable(newBinaryPath string) error {
 		return fmt.Errorf("failed to replace executable: %w", err)
 	}
 
+	return nil
+}
+
+// atomicReplaceFile atomically replaces dst with src using a temporary file and rename
+func (u *Updater) atomicReplaceFile(src, dst string) error {
+	// Get source file info for permissions
+	srcInfo, err := os.Stat(src)
+	if err != nil {
+		return fmt.Errorf("failed to stat source file: %w", err)
+	}
+
+	// Get destination file info for permissions (if it exists)
+	dstInfo, err := os.Stat(dst)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to stat destination file: %w", err)
+	}
+
+	// Create a temporary file in the same directory as the destination
+	// This ensures the rename operation is atomic (same filesystem)
+	tempFile, err := os.CreateTemp(filepath.Dir(dst), filepath.Base(dst)+".tmp.*")
+	if err != nil {
+		return fmt.Errorf("failed to create temporary file: %w", err)
+	}
+	tempPath := tempFile.Name()
+
+	// Ensure cleanup of temp file on failure
+	defer func() {
+		tempFile.Close()
+		if err := os.Remove(tempPath); err != nil && !os.IsNotExist(err) {
+			u.logger.Warn().Err(err).Str("temp_file", tempPath).Msg("Failed to remove temporary file")
+		}
+	}()
+
+	// Copy source file to temporary file
+	srcFile, err := os.Open(src)
+	if err != nil {
+		return fmt.Errorf("failed to open source file: %w", err)
+	}
+	defer srcFile.Close()
+
+	if _, err := io.Copy(tempFile, srcFile); err != nil {
+		return fmt.Errorf("failed to copy file content: %w", err)
+	}
+
+	// Sync to ensure data is written to disk
+	if err := tempFile.Sync(); err != nil {
+		return fmt.Errorf("failed to sync temporary file: %w", err)
+	}
+
+	// Close temporary file before setting permissions and renaming
+	if err := tempFile.Close(); err != nil {
+		return fmt.Errorf("failed to close temporary file: %w", err)
+	}
+
+	// Set permissions (prefer destination file permissions, fall back to source)
+	var perm os.FileMode = 0755 // Default executable permissions
+	if dstInfo != nil {
+		perm = dstInfo.Mode()
+	} else if srcInfo != nil {
+		perm = srcInfo.Mode()
+	}
+
+	if err := os.Chmod(tempPath, perm); err != nil {
+		return fmt.Errorf("failed to set permissions: %w", err)
+	}
+
+	// Atomically replace the destination file
+	if err := os.Rename(tempPath, dst); err != nil {
+		return fmt.Errorf("failed to rename temporary file: %w", err)
+	}
+
+	// If we get here, the rename succeeded, so don't delete the temp file in defer
+	tempPath = ""
 	return nil
 }
 
