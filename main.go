@@ -200,6 +200,9 @@ Get started:
 	rootCmd.PersistentFlags().Bool("no-color", false, "Disable colored output")
 	rootCmd.PersistentFlags().String("config", "", "Config file (default: ~/.config/commandchronicles/config.toml)")
 
+	// Disable auto-generated completion command (not yet implemented)
+	rootCmd.CompletionOptions.DisableDefaultCmd = true
+
 	// Add subcommands with configuration
 	rootCmd.AddCommand(initCmd(cfg))
 	rootCmd.AddCommand(loginCmd(cfg))
