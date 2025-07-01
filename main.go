@@ -3097,10 +3097,16 @@ Use with caution and consider exporting your history first.`,
 
 			// Strong confirmation required
 			if !force {
-				fmt.Printf("\n🚨 This will PERMANENTLY DELETE ALL %d command records!\n", stats.TotalMatches)
+				fmt.Printf("\n")
+				formatter.Warning("This will PERMANENTLY DELETE ALL %d command records!", stats.TotalMatches)
 				fmt.Printf("Type 'DELETE ALL' to confirm: ")
-				var response string
-				fmt.Scanln(&response)
+				reader := bufio.NewReader(os.Stdin)
+				response, err := reader.ReadString('\n')
+				if err != nil {
+					formatter.Error("Failed to read input.")
+					return nil
+				}
+				response = strings.TrimSpace(response)
 				if response != "DELETE ALL" {
 					formatter.Error("Wipe cancelled.")
 					return nil

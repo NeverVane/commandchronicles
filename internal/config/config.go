@@ -45,6 +45,9 @@ type Config struct {
 	// Output configuration
 	Output OutputConfig `toml:"output"`
 
+	// Deletion configuration
+	Deletion DeletionConfig `toml:"deletion"`
+
 	// Directory paths (computed, not stored in TOML)
 	DataDir   string `toml:"-"`
 	ConfigDir string `toml:"-"`
@@ -292,6 +295,18 @@ type ColorConfig struct {
 	Done    string `toml:"done"`    // Bright Green
 }
 
+// DeletionConfig contains deletion operation settings
+type DeletionConfig struct {
+	// Reset sync timestamp after full wipe operations
+	ResetSyncOnWipe bool `toml:"reset_sync_on_wipe"`
+
+	// Require explicit confirmation for wipe operations
+	RequireConfirmation bool `toml:"require_confirmation"`
+
+	// Export backup before deletion by default
+	AutoExportBeforeWipe bool `toml:"auto_export_before_wipe"`
+}
+
 // DefaultConfig returns a configuration with sensible defaults
 func DefaultConfig() *Config {
 	homeDir, _ := os.UserHomeDir()
@@ -403,6 +418,11 @@ func DefaultConfig() *Config {
 				Stats:   "#00FFFF", // Bright Cyan
 				Done:    "#00FF00", // Bright Green
 			},
+		},
+		Deletion: DeletionConfig{
+			ResetSyncOnWipe:      true,  // Default to resetting sync after wipe
+			RequireConfirmation:  true,  // Always require confirmation
+			AutoExportBeforeWipe: false, // Don't auto-export by default
 		},
 		DataDir:   dataDir,
 		ConfigDir: configDir,

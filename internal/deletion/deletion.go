@@ -1,7 +1,10 @@
 package deletion
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -119,7 +122,7 @@ func (ds *DeletionService) ExecuteDeletion(req *DeletionRequest) (*DeletionResul
 	start := time.Now()
 	result := &DeletionResult{
 		MatchedRecords: make([]*storage.CommandRecord, 0),
-		Errors:        make([]error, 0),
+		Errors:         make([]error, 0),
 	}
 
 	// Validate session
@@ -328,6 +331,15 @@ func (ds *DeletionService) updateComponentsAfterDeletion(deletedRecords []*stora
 		ds.searchService.RefreshCache()
 		ds.logger.Debug().Msg("Search service refreshed after deletion")
 	}
+
+	// Reset sync timestamp for full wipe operations if configured
+	if ds.config.Deletion.ResetSyncOnWipe && ds.isFullWipe(deletedRecords) {
+		if err := ds.resetSyncTimestamp(); err != nil {
+			ds.logger.Warn().Err(err).Msg("Failed to reset sync timestamp after full wipe")
+		} else {
+			ds.logger.Info().Msg("Reset sync timestamp after full wipe - next sync will download all server data")
+		}
+	}
 }
 
 // ValidatePattern validates a deletion pattern for safety
@@ -393,4 +405,29 @@ func (ds *DeletionService) GetDeletionStats(req *DeletionRequest) (*DeletionStat
 	}
 
 	return stats, nil
+}
+
+// resetSyncTimestamp resets the sync timestamp to 0 to trigger full re-download on next sync
+func (ds *DeletionService) resetSyncTimestamp() error {
+	syncTimeFile := filepath.Join(ds.config.DataDir, "last_sync_time")
+
+	// Write 0 timestamp to force full re-sync
+	data, err := json.Marshal(int64(0))
+	if err != nil {
+		return fmt.Errorf("failed to marshal zero timestamp: %w", err)
+	}
+
+	if err := os.WriteFile(syncTimeFile, data, 0600); err != nil {
+		return fmt.Errorf("failed to write sync timestamp file: %w", err)
+	}
+
+	ds.logger.Debug().Str("file", syncTimeFile).Msg("Reset sync timestamp to 0")
+	return nil
+}
+
+// isFullWipe determines if this deletion represents a full wipe operation
+func (ds *DeletionService) isFullWipe(deletedRecords []*storage.CommandRecord) bool {
+	// For now, consider any deletion with more than 100 records as a "full wipe"
+	// This heuristic can be improved later with request type tracking
+	return len(deletedRecords) > 100
 }
