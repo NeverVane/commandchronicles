@@ -940,7 +940,21 @@ func (ss *SecureStorage) UpdateRecordSyncMetadata(recordID int64, hash, deviceID
 	return nil
 }
 
-// GetStats returns current storage statistics
+// GetLastCommandTimestamp returns the timestamp of the most recent command
+func (ss *SecureStorage) GetLastCommandTimestamp() (int64, error) {
+	if err := ss.checkAccess(); err != nil {
+		return 0, err
+	}
+
+	timestamp, err := ss.db.GetLastCommandTimestamp()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get last command timestamp: %w", err)
+	}
+
+	return timestamp, nil
+}
+
+// GetStats returns storage statistics
 func (ss *SecureStorage) GetStats() *StorageStats {
 	ss.stats.mu.RLock()
 	defer ss.stats.mu.RUnlock()

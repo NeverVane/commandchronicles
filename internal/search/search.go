@@ -2,6 +2,7 @@ package search
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -15,12 +16,12 @@ import (
 
 // SearchService provides high-level search functionality using the hybrid cache
 type SearchService struct {
-	cache        *cache.Cache
-	storage      *securestorage.SecureStorage
-	config       *config.Config
-	logger       *logger.Logger
-	stats        *SearchStats
-	fuzzyEngine  *FuzzySearchEngine
+	cache       *cache.Cache
+	storage     *securestorage.SecureStorage
+	config      *config.Config
+	logger      *logger.Logger
+	stats       *SearchStats
+	fuzzyEngine *FuzzySearchEngine
 }
 
 // SearchStats tracks search performance metrics
@@ -55,8 +56,8 @@ type SearchRequest struct {
 	OnlySuccessful bool `json:"only_successful"`
 
 	// Fuzzy search options
-	UseFuzzySearch bool                  `json:"use_fuzzy_search"`
-	FuzzyOptions   *FuzzySearchOptions   `json:"fuzzy_options,omitempty"`
+	UseFuzzySearch bool                `json:"use_fuzzy_search"`
+	FuzzyOptions   *FuzzySearchOptions `json:"fuzzy_options,omitempty"`
 
 	// Performance options
 	UseCache   bool          `json:"use_cache"`
@@ -77,10 +78,10 @@ type SearchResponse struct {
 	CacheHitRatio float64       `json:"cache_hit_ratio"`
 
 	// Fuzzy search metrics
-	UsedFuzzySearch bool     `json:"used_fuzzy_search"`
+	UsedFuzzySearch bool      `json:"used_fuzzy_search"`
 	FuzzyScores     []float64 `json:"fuzzy_scores,omitempty"`
-	MaxFuzzyScore   float64  `json:"max_fuzzy_score,omitempty"`
-	MinFuzzyScore   float64  `json:"min_fuzzy_score,omitempty"`
+	MaxFuzzyScore   float64   `json:"max_fuzzy_score,omitempty"`
+	MinFuzzyScore   float64   `json:"min_fuzzy_score,omitempty"`
 
 	// Pagination
 	HasMore    bool `json:"has_more"`
@@ -134,19 +135,19 @@ func (s *SearchService) Initialize(opts *SearchOptions) error {
 	// Initialize fuzzy search engine if enabled
 	if opts.EnableFuzzySearch {
 		s.logger.Info().Str("index_path", opts.FuzzyIndexPath).Msg("Initializing fuzzy search engine")
-		
+
 		s.fuzzyEngine = NewFuzzySearchEngine(opts.FuzzyIndexPath)
 		if err := s.fuzzyEngine.Initialize(); err != nil {
 			s.logger.Warn().Err(err).Msg("Failed to initialize fuzzy search engine")
 			s.fuzzyEngine = nil
 		} else {
 			s.logger.Info().Msg("Fuzzy search engine initialized successfully")
-			
+
 			// Get initial index stats
 			if stats, err := s.fuzzyEngine.GetIndexStats(); err == nil {
 				s.logger.Info().Interface("stats", stats).Msg("Initial fuzzy index stats")
 			}
-			
+
 			// Rebuild index if requested
 			if opts.RebuildFuzzyIndex {
 				s.logger.Info().Msg("Rebuilding fuzzy search index")
@@ -680,14 +681,14 @@ func (s *SearchService) searchWithFuzzy(req *SearchRequest) (*SearchResponse, er
 		if s.recordMatchesFilters(fuzzyResult.Record, req) {
 			filteredRecords = append(filteredRecords, fuzzyResult.Record)
 			fuzzyScores = append(fuzzyScores, fuzzyResult.Score)
-			
+
 			if i == 0 || fuzzyResult.Score > maxScore {
 				maxScore = fuzzyResult.Score
 			}
 			if i == 0 || fuzzyResult.Score < minScore {
 				minScore = fuzzyResult.Score
 			}
-			
+
 			if len(filteredRecords) >= req.Limit {
 				break
 			}
@@ -740,12 +741,12 @@ func (s *SearchService) rebuildFuzzyIndex() error {
 	}
 
 	s.logger.Info().Msg("Loading all records for index rebuild")
-	
+
 	// Retrieve all records using batching approach since storage limits to 10000 records per query
 	var allRecords []*storage.CommandRecord
 	const batchSize = 10000
 	offset := 0
-	
+
 	for {
 		queryOpts := &securestorage.QueryOptions{
 			Limit:     batchSize,
@@ -758,7 +759,7 @@ func (s *SearchService) rebuildFuzzyIndex() error {
 			Int("batch_size", batchSize).
 			Int("offset", offset).
 			Msg("Retrieving batch of records for indexing")
-			
+
 		result, err := s.storage.Retrieve(queryOpts)
 		if err != nil {
 			s.logger.Error().Err(err).Msg("Failed to retrieve records for indexing")
@@ -842,4 +843,82 @@ func (s *SearchService) GetFuzzySearchStats() (map[string]interface{}, error) {
 
 	stats["enabled"] = true
 	return stats, nil
+}
+
+// isIndexStale checks if the fuzzy search index is stale compared to the latest command
+func (s *SearchService) isIndexStale() (bool, error) {
+	if s.fuzzyEngine == nil {
+		return false, nil // No fuzzy engine, so staleness doesn't apply
+	}
+
+	// Get last command timestamp from storage
+	lastCommandTimestamp, err := s.storage.GetLastCommandTimestamp()
+	if err != nil {
+		s.logger.Warn().Err(err).Msg("Failed to get last command timestamp, assuming index is stale")
+		return true, nil // Safe to assume stale if we can't check
+	}
+
+	// If no commands exist, index doesn't need to be rebuilt
+	if lastCommandTimestamp == 0 {
+		return false, nil
+	}
+
+	// Get fuzzy index file path
+	indexPath := filepath.Join(s.config.DataDir, "search_index")
+
+	// Check if index exists
+	indexStat, err := os.Stat(indexPath)
+	if os.IsNotExist(err) {
+		s.logger.Debug().Msg("Fuzzy index doesn't exist, needs rebuild")
+		return true, nil // Index doesn't exist, needs rebuild
+	}
+	if err != nil {
+		s.logger.Warn().Err(err).Msg("Failed to stat fuzzy index, assuming stale")
+		return true, nil // Can't check, assume stale
+	}
+
+	// Convert timestamps for comparison (both in milliseconds)
+	lastCommandTime := time.UnixMilli(lastCommandTimestamp)
+	indexTime := indexStat.ModTime()
+
+	// Index is stale if the last command is newer than the index
+	isStale := lastCommandTime.After(indexTime)
+
+	s.logger.Debug().
+		Time("last_command_time", lastCommandTime).
+		Time("index_time", indexTime).
+		Bool("is_stale", isStale).
+		Msg("Checked fuzzy index staleness")
+
+	return isStale, nil
+}
+
+// CheckAndRebuildStaleIndex checks if the fuzzy search index is stale and rebuilds it if needed
+func (s *SearchService) CheckAndRebuildStaleIndex() error {
+	if s.fuzzyEngine == nil {
+		s.logger.Debug().Msg("No fuzzy engine available, skipping index staleness check")
+		return nil
+	}
+
+	s.logger.Debug().Msg("Checking if fuzzy search index is stale")
+
+	isStale, err := s.isIndexStale()
+	if err != nil {
+		return fmt.Errorf("failed to check index staleness: %w", err)
+	}
+
+	if !isStale {
+		s.logger.Debug().Msg("Fuzzy search index is up to date")
+		return nil
+	}
+
+	s.logger.Info().Msg("Fuzzy search index is stale, rebuilding...")
+
+	if err := s.rebuildFuzzyIndex(); err != nil {
+		s.logger.Error().Err(err).Msg("Failed to rebuild stale fuzzy search index")
+		return fmt.Errorf("failed to rebuild stale index: %w", err)
+	}
+
+	s.logger.Info().Msg("Successfully rebuilt stale fuzzy search index")
+	return nil
 }

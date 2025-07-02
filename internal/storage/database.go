@@ -8,9 +8,9 @@ import (
 	"path/filepath"
 	"time"
 
-	_ "modernc.org/sqlite"
 	"github.com/NeverVane/commandchronicles/internal/config"
 	"github.com/NeverVane/commandchronicles/internal/logger"
+	_ "modernc.org/sqlite"
 )
 
 // Database wraps sql.DB with additional functionality for CommandChronicles
@@ -46,7 +46,7 @@ func NewDatabase(cfg *config.Config, opts *DatabaseOptions) (*Database, error) {
 	}
 
 	logger := logger.GetLogger().Database()
-	
+
 	db := &Database{
 		config: opts.Config,
 		logger: logger,
@@ -79,7 +79,7 @@ func (db *Database) initialize(opts *DatabaseOptions) error {
 
 	// Build connection string with secure options
 	connStr := db.buildConnectionString()
-	
+
 	db.logger.Debug().
 		Str("path", db.path).
 		Str("connection_string", connStr).
@@ -155,13 +155,13 @@ func (db *Database) initialize(opts *DatabaseOptions) error {
 // buildConnectionString creates a secure SQLite connection string
 func (db *Database) buildConnectionString() string {
 	params := map[string]string{
-		"_foreign_keys": "on",          // Enable foreign key constraints
-		"_journal_mode": "WAL",         // Use WAL mode for better concurrency
-		"_synchronous":  db.config.SyncMode, // Synchronous mode
-		"_cache_size":   "-2000",       // 2MB cache
-		"_temp_store":   "memory",      // Store temporary tables in memory
-		"_secure_delete": "on",         // Securely delete data
-		"_recursive_triggers": "on",    // Enable recursive triggers
+		"_foreign_keys":       "on",               // Enable foreign key constraints
+		"_journal_mode":       "WAL",              // Use WAL mode for better concurrency
+		"_synchronous":        db.config.SyncMode, // Synchronous mode
+		"_cache_size":         "-2000",            // 2MB cache
+		"_temp_store":         "memory",           // Store temporary tables in memory
+		"_secure_delete":      "on",               // Securely delete data
+		"_recursive_triggers": "on",               // Enable recursive triggers
 	}
 
 	connStr := db.path + "?"
@@ -181,13 +181,13 @@ func (db *Database) buildConnectionString() string {
 func (db *Database) configureConnectionPool() error {
 	// Set maximum number of open connections
 	db.db.SetMaxOpenConns(db.config.MaxOpenConns)
-	
+
 	// Set maximum number of idle connections
 	db.db.SetMaxIdleConns(db.config.MaxIdleConns)
-	
+
 	// Set maximum lifetime for connections
 	db.db.SetConnMaxLifetime(30 * time.Minute)
-	
+
 	// Set maximum idle time for connections
 	db.db.SetConnMaxIdleTime(5 * time.Minute)
 
@@ -197,10 +197,10 @@ func (db *Database) configureConnectionPool() error {
 // applySecurityPragmas applies security-focused SQLite pragmas
 func (db *Database) applySecurityPragmas() error {
 	pragmas := map[string]string{
-		"foreign_keys":       "ON",     // Enable foreign key constraints
-		"secure_delete":      "ON",     // Overwrite deleted data
+		"foreign_keys":       "ON",          // Enable foreign key constraints
+		"secure_delete":      "ON",          // Overwrite deleted data
 		"auto_vacuum":        "INCREMENTAL", // Enable incremental vacuum
-		"journal_mode":       "WAL",    // Use WAL mode
+		"journal_mode":       "WAL",         // Use WAL mode
 		"synchronous":        db.config.SyncMode,
 		"temp_store":         "memory", // Store temp data in memory
 		"cache_spill":        "FALSE",  // Don't spill cache to disk
@@ -308,7 +308,7 @@ func (db *Database) Stats() sql.DBStats {
 // Vacuum performs database maintenance
 func (db *Database) Vacuum() error {
 	db.logger.Info().Msg("Starting database vacuum")
-	
+
 	ctx, cancel := db.getContextWithTimeout(5 * time.Minute)
 	defer cancel()
 
@@ -373,21 +373,21 @@ func (db *Database) BeginTransaction() (*sql.Tx, error) {
 // GetAllEncryptedRecords retrieves all encrypted records from the database
 func (db *Database) GetAllEncryptedRecords(tx *sql.Tx) ([]EncryptedHistoryRecord, error) {
 	query := `SELECT id, encrypted_data, timestamp, session, hostname, created_at FROM history ORDER BY id`
-	
+
 	var rows *sql.Rows
 	var err error
-	
+
 	if tx != nil {
 		rows, err = tx.Query(query)
 	} else {
 		rows, err = db.db.Query(query)
 	}
-	
+
 	if err != nil {
 		return nil, fmt.Errorf("failed to query encrypted records: %w", err)
 	}
 	defer rows.Close()
-	
+
 	var records []EncryptedHistoryRecord
 	for rows.Next() {
 		var record EncryptedHistoryRecord
@@ -403,29 +403,46 @@ func (db *Database) GetAllEncryptedRecords(tx *sql.Tx) ([]EncryptedHistoryRecord
 		}
 		records = append(records, record)
 	}
-	
+
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("error iterating encrypted records: %w", err)
 	}
-	
+
 	return records, nil
+}
+
+// GetLastCommandTimestamp returns the timestamp of the most recent command
+func (db *Database) GetLastCommandTimestamp() (int64, error) {
+	query := `SELECT MAX(timestamp) FROM history`
+
+	var timestamp sql.NullInt64
+	err := db.db.QueryRow(query).Scan(&timestamp)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get last command timestamp: %w", err)
+	}
+
+	if !timestamp.Valid {
+		return 0, nil // No commands in database
+	}
+
+	return timestamp.Int64, nil
 }
 
 // UpdateEncryptedData updates the encrypted data for a specific record
 func (db *Database) UpdateEncryptedData(tx *sql.Tx, recordID int64, newEncryptedData []byte) error {
 	query := `UPDATE history SET encrypted_data = ? WHERE id = ?`
-	
+
 	var err error
 	if tx != nil {
 		_, err = tx.Exec(query, newEncryptedData, recordID)
 	} else {
 		_, err = db.db.Exec(query, newEncryptedData, recordID)
 	}
-	
+
 	if err != nil {
 		return fmt.Errorf("failed to update encrypted data for record %d: %w", recordID, err)
 	}
-	
+
 	return nil
 }
 
@@ -461,7 +478,7 @@ func (db *Database) SetSecureDeleteMode(enabled bool) error {
 	if enabled {
 		value = "ON"
 	}
-	
+
 	query := fmt.Sprintf("PRAGMA secure_delete = %s", value)
 	if _, err := db.db.Exec(query); err != nil {
 		return fmt.Errorf("failed to set secure delete mode: %w", err)
@@ -470,4 +487,3 @@ func (db *Database) SetSecureDeleteMode(enabled bool) error {
 	db.logger.Debug().Bool("enabled", enabled).Msg("Updated secure delete mode")
 	return nil
 }
-

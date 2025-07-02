@@ -2516,6 +2516,12 @@ func initializeSession(cfg *config.Config, log *logger.Logger) (*TUISession, err
 		return nil, fmt.Errorf("failed to initialize search service: %w", err)
 	}
 
+	// Check and rebuild fuzzy index if stale
+	log.Debug().Msg("Checking fuzzy search index staleness")
+	if err := searchService.CheckAndRebuildStaleIndex(); err != nil {
+		log.Warn().Err(err).Msg("Failed to check/rebuild stale fuzzy index, fuzzy search may not work optimally")
+	}
+
 	log.Info().Msg("All TUI services initialized successfully")
 
 	// Step 7: Initialize deletion service

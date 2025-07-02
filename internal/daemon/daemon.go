@@ -5,26 +5,31 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
 	"github.com/NeverVane/commandchronicles/internal/auth"
+	"github.com/NeverVane/commandchronicles/internal/cache"
 	"github.com/NeverVane/commandchronicles/internal/config"
 	"github.com/NeverVane/commandchronicles/internal/logger"
+	"github.com/NeverVane/commandchronicles/internal/search"
 	"github.com/NeverVane/commandchronicles/internal/sync"
 	securestorage "github.com/NeverVane/commandchronicles/pkg/storage"
 )
 
 // Daemon represents the sync daemon process
 type Daemon struct {
-	config      *config.Config
-	syncService *sync.SyncService
-	logger      *logger.Logger
-	pidManager  *PIDManager
-	authManager *auth.AuthManager
-	storage     *securestorage.SecureStorage
-	ctx         context.Context
-	cancel      context.CancelFunc
+	config        *config.Config
+	syncService   *sync.SyncService
+	searchService *search.SearchService
+	cache         *cache.Cache
+	logger        *logger.Logger
+	pidManager    *PIDManager
+	authManager   *auth.AuthManager
+	storage       *securestorage.SecureStorage
+	ctx           context.Context
+	cancel        context.CancelFunc
 
 	// Runtime state
 	isRunning    bool
@@ -53,6 +58,12 @@ func NewDaemon(cfg *config.Config) (*Daemon, error) {
 		return nil, fmt.Errorf("failed to create secure storage: %w", err)
 	}
 
+	// Create cache
+	hybridCache := cache.NewCache(&cfg.Cache, storage)
+
+	// Create search service
+	searchService := search.NewSearchService(hybridCache, storage, cfg)
+
 	// Create sync service
 	syncService := sync.NewSyncService(cfg, storage, authMgr)
 
@@ -62,15 +73,17 @@ func NewDaemon(cfg *config.Config) (*Daemon, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &Daemon{
-		config:      cfg,
-		syncService: syncService,
-		logger:      logger,
-		pidManager:  pidManager,
-		authManager: authMgr,
-		storage:     storage,
-		ctx:         ctx,
-		cancel:      cancel,
-		isRunning:   false,
+		config:        cfg,
+		syncService:   syncService,
+		searchService: searchService,
+		cache:         hybridCache,
+		logger:        logger,
+		pidManager:    pidManager,
+		authManager:   authMgr,
+		storage:       storage,
+		ctx:           ctx,
+		cancel:        cancel,
+		isRunning:     false,
 	}, nil
 }
 
@@ -101,6 +114,25 @@ func (d *Daemon) Start() error {
 		}
 	}()
 
+	// Initialize search service with fuzzy search enabled
+	fuzzyIndexPath := filepath.Join(d.config.DataDir, "search_index")
+	searchOpts := &search.SearchOptions{
+		EnableCache:       true,
+		EnableFuzzySearch: true,
+		WarmupCache:       false, // Skip cache warmup in daemon to save resources
+		DefaultLimit:      50,
+		DefaultTimeout:    30 * time.Second,
+		FuzzyIndexPath:    fuzzyIndexPath,
+		RebuildFuzzyIndex: false, // Don't rebuild on startup, let staleness check handle it
+	}
+
+	if err := d.searchService.Initialize(searchOpts); err != nil {
+		d.logger.WithError(err).Warn().Msg("Failed to initialize search service in daemon")
+		// Don't fail daemon startup if search service fails
+	} else {
+		d.logger.Debug().Msg("Search service initialized in daemon")
+	}
+
 	// Setup signal handling
 	d.setupSignalHandling()
 
@@ -127,6 +159,14 @@ func (d *Daemon) Stop() error {
 	// Close services
 	if d.syncService != nil {
 		d.syncService.Close()
+	}
+
+	if d.searchService != nil {
+		d.searchService.Close()
+	}
+
+	if d.cache != nil {
+		d.cache.Close()
 	}
 
 	if d.storage != nil {
@@ -248,6 +288,12 @@ func (d *Daemon) performSync() {
 			"duration":   duration,
 			"sync_count": d.syncCount,
 		}).Info().Msg("Sync completed successfully")
+
+		// Check and rebuild fuzzy search index if stale after successful sync
+		d.logger.Debug().Msg("Checking fuzzy search index staleness after sync")
+		if err := d.searchService.CheckAndRebuildStaleIndex(); err != nil {
+			d.logger.WithError(err).Warn().Msg("Failed to check/rebuild stale fuzzy index after sync")
+		}
 
 		return
 	}
