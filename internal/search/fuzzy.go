@@ -37,6 +37,7 @@ type SearchableCommandRecord struct {
 	GitRoot    string    `json:"git_root,omitempty"`
 	User       string    `json:"user,omitempty"`
 	Shell      string    `json:"shell,omitempty"`
+	Note       string    `json:"note,omitempty"` // User note for the command
 	ExitCode   int       `json:"exit_code"`
 	Duration   int64     `json:"duration_ms"`
 	Timestamp  time.Time `json:"timestamp"`
@@ -182,6 +183,14 @@ func (f *FuzzySearchEngine) createIndexMapping() mapping.IndexMapping {
 	shellMapping.Store = true
 	shellMapping.Index = true
 	commandMapping.AddFieldMappingsAt("shell", shellMapping)
+
+	// Note field - text search with analysis (like command field)
+	noteMapping := bleve.NewTextFieldMapping()
+	noteMapping.Analyzer = en.AnalyzerName
+	noteMapping.Store = true
+	noteMapping.Index = true
+	noteMapping.IncludeTermVectors = true
+	commandMapping.AddFieldMappingsAt("note", noteMapping)
 
 	// Numeric fields
 	exitCodeMapping := bleve.NewNumericFieldMapping()
@@ -473,6 +482,9 @@ func (f *FuzzySearchEngine) extractRecordFromHit(hit *search.DocumentMatch) (*st
 	if shell, ok := fields["shell"].(string); ok {
 		record.Shell = shell
 	}
+	if note, ok := fields["note"].(string); ok {
+		record.Note = note
+	}
 
 	// Extract numeric fields
 	if exitCode, ok := fields["exit_code"].(float64); ok {
@@ -523,6 +535,7 @@ func (f *FuzzySearchEngine) convertToSearchableRecord(record *storage.CommandRec
 		GitRoot:    record.GitRoot,
 		User:       record.User,
 		Shell:      record.Shell,
+		Note:       record.Note,
 		ExitCode:   record.ExitCode,
 		Duration:   record.Duration,
 		Timestamp:  time.UnixMilli(record.Timestamp),

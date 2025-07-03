@@ -211,6 +211,7 @@ Get started:
 	rootCmd.AddCommand(importCmd(cfg))
 	rootCmd.AddCommand(exportCmd(cfg))
 	rootCmd.AddCommand(statsCmd(cfg))
+	rootCmd.AddCommand(noteCmd(cfg))
 	rootCmd.AddCommand(lockCmd(cfg))
 	rootCmd.AddCommand(unlockCmd(cfg))
 	rootCmd.AddCommand(changePasswordCmd(cfg))
@@ -4195,6 +4196,398 @@ func daemonControlCmd(cfg *config.Config) *cobra.Command {
 }
 
 // cancelSubscriptionCmd cancels the user's premium subscription
+func noteCmd(cfg *config.Config) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "note",
+		Short: "Manage notes for command history",
+		Long: `Add, edit, view, and search notes for your command history.
+
+Notes help you document important commands with context, explanations,
+or reminders about why you ran specific commands.`,
+	}
+
+	cmd.AddCommand(noteAddCmd(cfg))
+	cmd.AddCommand(noteEditCmd(cfg))
+	cmd.AddCommand(noteDeleteCmd(cfg))
+	cmd.AddCommand(noteShowCmd(cfg))
+	cmd.AddCommand(noteListCmd(cfg))
+	cmd.AddCommand(noteSearchCmd(cfg))
+
+	return cmd
+}
+
+func noteAddCmd(cfg *config.Config) *cobra.Command {
+	return &cobra.Command{
+		Use:   "add <command-id> <note>",
+		Short: "Add a note to a command",
+		Long: `Add a note to a specific command in your history.
+
+The command ID can be found using 'ccr search' or 'ccr tui'.
+Notes are limited to 1000 characters.`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// Initialize auth manager
+			authMgr, err := auth.NewAuthManager(cfg)
+			if err != nil {
+				return fmt.Errorf("failed to initialize auth manager: %w", err)
+			}
+			defer authMgr.Close()
+
+			log := logger.GetLogger().WithComponent("note")
+
+			// Get session key
+			sessionKey, err := getSearchSessionKey(authMgr, log)
+			if err != nil {
+				return fmt.Errorf("failed to get session key: %w", err)
+			}
+
+			// Parse record ID
+			recordID, err := strconv.ParseInt(args[0], 10, 64)
+			if err != nil {
+				return fmt.Errorf("invalid command ID: %s", args[0])
+			}
+
+			note := args[1]
+
+			// Initialize secure storage
+			storage, err := securestorage.NewSecureStorage(&securestorage.StorageOptions{
+				Config:              cfg,
+				CreateIfMissing:     false,
+				ValidatePermissions: true,
+			})
+			if err != nil {
+				return fmt.Errorf("failed to initialize storage: %w", err)
+			}
+			defer storage.Close()
+
+			// Unlock storage
+			if err := storage.UnlockWithKey(sessionKey); err != nil {
+				return fmt.Errorf("failed to unlock storage: %w", err)
+			}
+
+			// Add note
+			if err := storage.AddNote(recordID, note); err != nil {
+				return fmt.Errorf("failed to add note: %w", err)
+			}
+
+			fmt.Printf("Note added to command %d\n", recordID)
+			return nil
+		},
+	}
+}
+
+func noteEditCmd(cfg *config.Config) *cobra.Command {
+	return &cobra.Command{
+		Use:   "edit <command-id> <note>",
+		Short: "Edit a note for a command",
+		Long: `Edit an existing note for a specific command in your history.
+
+The command ID can be found using 'ccr search' or 'ccr tui'.
+Notes are limited to 1000 characters.`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// Initialize auth manager
+			authMgr, err := auth.NewAuthManager(cfg)
+			if err != nil {
+				return fmt.Errorf("failed to initialize auth manager: %w", err)
+			}
+			defer authMgr.Close()
+
+			log := logger.GetLogger().WithComponent("note")
+
+			// Get session key
+			sessionKey, err := getSearchSessionKey(authMgr, log)
+			if err != nil {
+				return fmt.Errorf("failed to get session key: %w", err)
+			}
+
+			// Parse record ID
+			recordID, err := strconv.ParseInt(args[0], 10, 64)
+			if err != nil {
+				return fmt.Errorf("invalid command ID: %s", args[0])
+			}
+
+			note := args[1]
+
+			// Initialize secure storage
+			storage, err := securestorage.NewSecureStorage(&securestorage.StorageOptions{
+				Config:              cfg,
+				CreateIfMissing:     false,
+				ValidatePermissions: true,
+			})
+			if err != nil {
+				return fmt.Errorf("failed to initialize storage: %w", err)
+			}
+			defer storage.Close()
+
+			// Unlock storage
+			if err := storage.UnlockWithKey(sessionKey); err != nil {
+				return fmt.Errorf("failed to unlock storage: %w", err)
+			}
+
+			// Update note
+			if err := storage.UpdateNote(recordID, note); err != nil {
+				return fmt.Errorf("failed to update note: %w", err)
+			}
+
+			fmt.Printf("Note updated for command %d\n", recordID)
+			return nil
+		},
+	}
+}
+
+func noteDeleteCmd(cfg *config.Config) *cobra.Command {
+	return &cobra.Command{
+		Use:   "delete <command-id>",
+		Short: "Delete a note from a command",
+		Long: `Remove the note from a specific command in your history.
+
+The command ID can be found using 'ccr search' or 'ccr tui'.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// Initialize auth manager
+			authMgr, err := auth.NewAuthManager(cfg)
+			if err != nil {
+				return fmt.Errorf("failed to initialize auth manager: %w", err)
+			}
+			defer authMgr.Close()
+
+			log := logger.GetLogger().WithComponent("note")
+
+			// Get session key
+			sessionKey, err := getSearchSessionKey(authMgr, log)
+			if err != nil {
+				return fmt.Errorf("failed to get session key: %w", err)
+			}
+
+			// Parse record ID
+			recordID, err := strconv.ParseInt(args[0], 10, 64)
+			if err != nil {
+				return fmt.Errorf("invalid command ID: %s", args[0])
+			}
+
+			// Initialize secure storage
+			storage, err := securestorage.NewSecureStorage(&securestorage.StorageOptions{
+				Config:              cfg,
+				CreateIfMissing:     false,
+				ValidatePermissions: true,
+			})
+			if err != nil {
+				return fmt.Errorf("failed to initialize storage: %w", err)
+			}
+			defer storage.Close()
+
+			// Unlock storage
+			if err := storage.UnlockWithKey(sessionKey); err != nil {
+				return fmt.Errorf("failed to unlock storage: %w", err)
+			}
+
+			// Delete note
+			if err := storage.DeleteNote(recordID); err != nil {
+				return fmt.Errorf("failed to delete note: %w", err)
+			}
+
+			fmt.Printf("Note deleted from command %d\n", recordID)
+			return nil
+		},
+	}
+}
+
+func noteShowCmd(cfg *config.Config) *cobra.Command {
+	return &cobra.Command{
+		Use:   "show <command-id>",
+		Short: "Show the note for a command",
+		Long: `Display the note for a specific command in your history.
+
+The command ID can be found using 'ccr search' or 'ccr tui'.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// Initialize auth manager
+			authMgr, err := auth.NewAuthManager(cfg)
+			if err != nil {
+				return fmt.Errorf("failed to initialize auth manager: %w", err)
+			}
+			defer authMgr.Close()
+
+			log := logger.GetLogger().WithComponent("note")
+
+			// Get session key
+			sessionKey, err := getSearchSessionKey(authMgr, log)
+			if err != nil {
+				return fmt.Errorf("failed to get session key: %w", err)
+			}
+
+			// Parse record ID
+			recordID, err := strconv.ParseInt(args[0], 10, 64)
+			if err != nil {
+				return fmt.Errorf("invalid command ID: %s", args[0])
+			}
+
+			// Initialize secure storage
+			storage, err := securestorage.NewSecureStorage(&securestorage.StorageOptions{
+				Config:              cfg,
+				CreateIfMissing:     false,
+				ValidatePermissions: true,
+			})
+			if err != nil {
+				return fmt.Errorf("failed to initialize storage: %w", err)
+			}
+			defer storage.Close()
+
+			// Unlock storage
+			if err := storage.UnlockWithKey(sessionKey); err != nil {
+				return fmt.Errorf("failed to unlock storage: %w", err)
+			}
+
+			// Get note
+			note, err := storage.GetNote(recordID)
+			if err != nil {
+				return fmt.Errorf("failed to get note: %w", err)
+			}
+
+			if note == "" {
+				fmt.Printf("No note found for command %d\n", recordID)
+			} else {
+				fmt.Printf("Note for command %d:\n%s\n", recordID, note)
+			}
+			return nil
+		},
+	}
+}
+
+func noteListCmd(cfg *config.Config) *cobra.Command {
+	return &cobra.Command{
+		Use:   "list",
+		Short: "List all commands with notes",
+		Long: `Display all commands that have notes attached.
+
+This helps you see which commands you've documented with notes.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// Initialize auth manager
+			authMgr, err := auth.NewAuthManager(cfg)
+			if err != nil {
+				return fmt.Errorf("failed to initialize auth manager: %w", err)
+			}
+			defer authMgr.Close()
+
+			log := logger.GetLogger().WithComponent("note")
+
+			// Get session key
+			sessionKey, err := getSearchSessionKey(authMgr, log)
+			if err != nil {
+				return fmt.Errorf("failed to get session key: %w", err)
+			}
+
+			// Initialize secure storage
+			storage, err := securestorage.NewSecureStorage(&securestorage.StorageOptions{
+				Config:              cfg,
+				CreateIfMissing:     false,
+				ValidatePermissions: true,
+			})
+			if err != nil {
+				return fmt.Errorf("failed to initialize storage: %w", err)
+			}
+			defer storage.Close()
+
+			// Unlock storage
+			if err := storage.UnlockWithKey(sessionKey); err != nil {
+				return fmt.Errorf("failed to unlock storage: %w", err)
+			}
+
+			// Get all noted commands
+			result, err := storage.GetAllNotedCommands(&securestorage.QueryOptions{
+				Limit: 100,
+			})
+			if err != nil {
+				return fmt.Errorf("failed to get noted commands: %w", err)
+			}
+
+			if len(result.Records) == 0 {
+				fmt.Println("No commands with notes found")
+				return nil
+			}
+
+			fmt.Printf("Found %d commands with notes:\n\n", len(result.Records))
+			for _, record := range result.Records {
+				fmt.Printf("ID: %d\n", record.ID)
+				fmt.Printf("Command: %s\n", record.Command)
+				fmt.Printf("Note: %s\n", record.GetNotePreview(100))
+				fmt.Println("---")
+			}
+
+			return nil
+		},
+	}
+}
+
+func noteSearchCmd(cfg *config.Config) *cobra.Command {
+	return &cobra.Command{
+		Use:   "search <query>",
+		Short: "Search notes for specific text",
+		Long: `Search through all notes for commands containing specific text.
+
+This helps you find commands by searching their notes content.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// Initialize auth manager
+			authMgr, err := auth.NewAuthManager(cfg)
+			if err != nil {
+				return fmt.Errorf("failed to initialize auth manager: %w", err)
+			}
+			defer authMgr.Close()
+
+			log := logger.GetLogger().WithComponent("note")
+
+			// Get session key
+			sessionKey, err := getSearchSessionKey(authMgr, log)
+			if err != nil {
+				return fmt.Errorf("failed to get session key: %w", err)
+			}
+
+			query := args[0]
+
+			// Initialize secure storage
+			storage, err := securestorage.NewSecureStorage(&securestorage.StorageOptions{
+				Config:              cfg,
+				CreateIfMissing:     false,
+				ValidatePermissions: true,
+			})
+			if err != nil {
+				return fmt.Errorf("failed to initialize storage: %w", err)
+			}
+			defer storage.Close()
+
+			// Unlock storage
+			if err := storage.UnlockWithKey(sessionKey); err != nil {
+				return fmt.Errorf("failed to unlock storage: %w", err)
+			}
+
+			// Search notes
+			result, err := storage.SearchNotes(query, &securestorage.QueryOptions{
+				Limit: 100,
+			})
+			if err != nil {
+				return fmt.Errorf("failed to search notes: %w", err)
+			}
+
+			if len(result.Records) == 0 {
+				fmt.Printf("No notes found matching '%s'\n", query)
+				return nil
+			}
+
+			fmt.Printf("Found %d commands with notes matching '%s':\n\n", len(result.Records), query)
+			for _, record := range result.Records {
+				fmt.Printf("ID: %d\n", record.ID)
+				fmt.Printf("Command: %s\n", record.Command)
+				fmt.Printf("Note: %s\n", record.GetNotePreview(100))
+				fmt.Println("---")
+			}
+
+			return nil
+		},
+	}
+}
+
 func cancelSubscriptionCmd(cfg *config.Config) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "cancel-subscription",

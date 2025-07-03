@@ -1,66 +1,69 @@
 package storage
 
 import (
+	"fmt"
+	"strings"
 	"time"
 )
 
 // CommandRecord represents a single command execution with all contextual information
 type CommandRecord struct {
 	// Database identifier
-	ID        int64  `json:"id"`                  // Database record ID for deletion operations
-	
+	ID int64 `json:"id"` // Database record ID for deletion operations
+
 	// Core command information
-	Command   string `json:"command"`             // The actual command text
-	ExitCode  int    `json:"exit_code"`           // Command exit code
-	Duration  int64  `json:"duration_ms"`         // Execution duration in milliseconds
-	
+	Command  string `json:"command"`        // The actual command text
+	ExitCode int    `json:"exit_code"`      // Command exit code
+	Duration int64  `json:"duration_ms"`    // Execution duration in milliseconds
+	Note     string `json:"note,omitempty"` // Optional user note about the command
+
 	// Context information
-	WorkingDir string `json:"working_dir"`         // Directory where command was executed
-	Timestamp  int64  `json:"timestamp_ms"`        // Unix timestamp in milliseconds
-	SessionID  string `json:"session_id"`          // Session UUID
-	Hostname   string `json:"hostname"`            // Machine hostname
-	
+	WorkingDir string `json:"working_dir"`  // Directory where command was executed
+	Timestamp  int64  `json:"timestamp_ms"` // Unix timestamp in milliseconds
+	SessionID  string `json:"session_id"`   // Session UUID
+	Hostname   string `json:"hostname"`     // Machine hostname
+
 	// Optional context
-	GitRoot    string `json:"git_root,omitempty"`  // Git repository root if applicable
-	GitBranch  string `json:"git_branch,omitempty"` // Git branch if applicable
-	GitCommit  string `json:"git_commit,omitempty"` // Git commit hash if applicable
-	
+	GitRoot   string `json:"git_root,omitempty"`   // Git repository root if applicable
+	GitBranch string `json:"git_branch,omitempty"` // Git branch if applicable
+	GitCommit string `json:"git_commit,omitempty"` // Git commit hash if applicable
+
 	// Environment context
-	User       string            `json:"user"`                    // Username
-	Shell      string            `json:"shell"`                   // Shell type (bash, zsh, etc.)
-	TTY        string            `json:"tty,omitempty"`           // TTY device
-	Environment map[string]string `json:"environment,omitempty"`  // Relevant environment variables
-	
+	User        string            `json:"user"`                  // Username
+	Shell       string            `json:"shell"`                 // Shell type (bash, zsh, etc.)
+	TTY         string            `json:"tty,omitempty"`         // TTY device
+	Environment map[string]string `json:"environment,omitempty"` // Relevant environment variables
+
 	// Metadata
-	Version    int    `json:"version"`             // Schema version for future compatibility
-	CreatedAt  int64  `json:"created_at_ms"`       // Record creation timestamp
-	
+	Version   int   `json:"version"`       // Schema version for future compatibility
+	CreatedAt int64 `json:"created_at_ms"` // Record creation timestamp
+
 	// NEW: Sync-related fields (backward compatible)
-	DeviceID      string    `json:"device_id,omitempty"`
-	RecordHash    string    `json:"record_hash,omitempty"`
-	LastSynced    *int64    `json:"last_synced,omitempty"`  // Unix timestamp in ms
-	SyncStatus    int       `json:"sync_status,omitempty"` // 0=local, 1=synced, 2=conflict
+	DeviceID   string `json:"device_id,omitempty"`
+	RecordHash string `json:"record_hash,omitempty"`
+	LastSynced *int64 `json:"last_synced,omitempty"` // Unix timestamp in ms
+	SyncStatus int    `json:"sync_status,omitempty"` // 0=local, 1=synced, 2=conflict
 }
 
 // EncryptedHistoryRecord represents a row in the history table
 type EncryptedHistoryRecord struct {
 	ID            int64  `db:"id"`
-	EncryptedData []byte `db:"encrypted_data"`  // Encrypted CommandRecord JSON
-	Timestamp     int64  `db:"timestamp"`       // Unencrypted timestamp for indexing
-	Session       string `db:"session"`         // Unencrypted session ID for filtering
-	Hostname      string `db:"hostname"`        // Unencrypted hostname for filtering
-	CreatedAt     int64  `db:"created_at"`      // Record insertion timestamp
+	EncryptedData []byte `db:"encrypted_data"` // Encrypted CommandRecord JSON
+	Timestamp     int64  `db:"timestamp"`      // Unencrypted timestamp for indexing
+	Session       string `db:"session"`        // Unencrypted session ID for filtering
+	Hostname      string `db:"hostname"`       // Unencrypted hostname for filtering
+	CreatedAt     int64  `db:"created_at"`     // Record insertion timestamp
 }
 
 // DatabaseSchema contains all SQL statements for database initialization
 type DatabaseSchema struct {
 	// Current schema version
 	Version int
-	
+
 	// DDL statements
 	Tables  []string
 	Indexes []string
-	
+
 	// Migration statements for future use
 	Migrations map[int][]string
 }
@@ -82,13 +85,13 @@ func GetCurrentSchema() *DatabaseSchema {
 				last_synced INTEGER,
 				sync_status INTEGER DEFAULT 0
 			)`,
-			
+
 			`CREATE TABLE IF NOT EXISTS schema_version (
 				version INTEGER PRIMARY KEY,
 				applied_at INTEGER NOT NULL,
 				description TEXT
 			)`,
-			
+
 			`CREATE TABLE IF NOT EXISTS session_metadata (
 				session_id TEXT PRIMARY KEY,
 				start_time INTEGER NOT NULL,
@@ -99,7 +102,7 @@ func GetCurrentSchema() *DatabaseSchema {
 				created_at INTEGER NOT NULL
 			)`,
 		},
-		
+
 		Indexes: []string{
 			`CREATE INDEX IF NOT EXISTS idx_history_timestamp ON history(timestamp)`,
 			`CREATE INDEX IF NOT EXISTS idx_history_session ON history(session)`,
@@ -109,12 +112,12 @@ func GetCurrentSchema() *DatabaseSchema {
 			`CREATE INDEX IF NOT EXISTS idx_history_sync_status ON history(sync_status)`,
 			`CREATE INDEX IF NOT EXISTS idx_history_device_id ON history(device_id)`,
 			`CREATE INDEX IF NOT EXISTS idx_history_last_synced ON history(last_synced)`,
-			
+
 			`CREATE INDEX IF NOT EXISTS idx_session_start_time ON session_metadata(start_time)`,
 			`CREATE INDEX IF NOT EXISTS idx_session_hostname ON session_metadata(hostname)`,
 			`CREATE INDEX IF NOT EXISTS idx_session_user ON session_metadata(user_name)`,
 		},
-		
+
 		Migrations: map[int][]string{
 			2: []string{
 				`ALTER TABLE history ADD COLUMN device_id TEXT`,
@@ -133,7 +136,7 @@ func GetCurrentSchema() *DatabaseSchema {
 type SessionMetadata struct {
 	SessionID string `db:"session_id"`
 	StartTime int64  `db:"start_time"`
-	EndTime   *int64 `db:"end_time"`   // NULL until session ends
+	EndTime   *int64 `db:"end_time"` // NULL until session ends
 	Hostname  string `db:"hostname"`
 	UserName  string `db:"user_name"`
 	ShellType string `db:"shell_type"`
@@ -150,7 +153,7 @@ type SchemaVersion struct {
 // NewCommandRecord creates a new command record with current timestamp
 func NewCommandRecord(command string, exitCode int, duration int64, workingDir, sessionID, hostname string) *CommandRecord {
 	now := time.Now().UnixMilli()
-	
+
 	return &CommandRecord{
 		Command:    command,
 		ExitCode:   exitCode,
@@ -185,25 +188,75 @@ func (cr *CommandRecord) MarkSynced() {
 	cr.LastSynced = &now
 }
 
+// HasNote returns true if the command has a note
+func (cr *CommandRecord) HasNote() bool {
+	return strings.TrimSpace(cr.Note) != ""
+}
+
+// SetNote sets a note for the command with validation
+func (cr *CommandRecord) SetNote(note string) error {
+	trimmed := strings.TrimSpace(note)
+	if len(trimmed) > MaxNoteLength {
+		return fmt.Errorf("note exceeds maximum length of %d characters", MaxNoteLength)
+	}
+	cr.Note = trimmed
+	return nil
+}
+
+// ClearNote removes the note from the command
+func (cr *CommandRecord) ClearNote() {
+	cr.Note = ""
+}
+
+// IsNoteValid validates the note length
+func (cr *CommandRecord) IsNoteValid() bool {
+	return len(strings.TrimSpace(cr.Note)) <= MaxNoteLength
+}
+
+// GetNotePreview returns a truncated preview of the note for display
+func (cr *CommandRecord) GetNotePreview(maxLength int) string {
+	if !cr.HasNote() {
+		return ""
+	}
+
+	if maxLength <= 0 {
+		maxLength = 100 // Default preview length
+	}
+
+	trimmed := strings.TrimSpace(cr.Note)
+	if len(trimmed) <= maxLength {
+		return trimmed
+	}
+
+	// Find the last complete word within the limit
+	preview := trimmed[:maxLength]
+	if lastSpace := strings.LastIndex(preview, " "); lastSpace > maxLength/2 {
+		preview = preview[:lastSpace]
+	}
+
+	return preview + "..."
+}
+
 // GetSearchableFields returns fields that can be searched without decryption
 func (ehr *EncryptedHistoryRecord) GetSearchableFields() map[string]interface{} {
 	return map[string]interface{}{
-		"timestamp": ehr.Timestamp,
-		"session":   ehr.Session,
-		"hostname":  ehr.Hostname,
+		"timestamp":  ehr.Timestamp,
+		"session":    ehr.Session,
+		"hostname":   ehr.Hostname,
 		"created_at": ehr.CreatedAt,
 	}
 }
 
 // Constants for database constraints and limits
 const (
-	MaxCommandLength    = 65536  // Maximum command text length
-	MaxWorkingDirLength = 4096   // Maximum working directory path length
-	MaxHostnameLength   = 253    // RFC 1035 hostname limit
-	MaxSessionIDLength  = 36     // UUID length
-	MaxEnvironmentVars  = 100    // Maximum number of environment variables to store
-	MaxEnvironmentSize  = 8192   // Maximum total size of environment data
-	
+	MaxCommandLength    = 65536 // Maximum command text length
+	MaxWorkingDirLength = 4096  // Maximum working directory path length
+	MaxHostnameLength   = 253   // RFC 1035 hostname limit
+	MaxSessionIDLength  = 36    // UUID length
+	MaxEnvironmentVars  = 100   // Maximum number of environment variables to store
+	MaxEnvironmentSize  = 8192  // Maximum total size of environment data
+	MaxNoteLength       = 1000  // Maximum note text length
+
 	// Schema version constants
 	CurrentSchemaVersion = 2
 	MinSupportedVersion  = 1
@@ -212,7 +265,7 @@ const (
 // Sync status constants
 const (
 	SyncStatusLocal    = 0
-	SyncStatusSynced   = 1 
+	SyncStatusSynced   = 1
 	SyncStatusConflict = 2
 )
 
@@ -222,5 +275,6 @@ var DatabaseConstraints = map[string]interface{}{
 	"max_working_dir_length": MaxWorkingDirLength,
 	"max_hostname_length":    MaxHostnameLength,
 	"max_session_id_length":  MaxSessionIDLength,
+	"max_note_length":        MaxNoteLength,
 	"current_schema_version": CurrentSchemaVersion,
 }

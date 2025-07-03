@@ -2,6 +2,7 @@ package storage
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -1021,7 +1022,7 @@ func (ss *SecureStorage) Close() error {
 	return nil
 }
 
-// ValidateIntegrity performs a comprehensive integrity check
+// ValidateIntegrity performs comprehensive integrity checks on the storage
 func (ss *SecureStorage) ValidateIntegrity() error {
 	if err := ss.checkAccess(); err != nil {
 		return err
@@ -1045,6 +1046,335 @@ func (ss *SecureStorage) ValidateIntegrity() error {
 	}
 
 	ss.logger.Info().Msg("Storage integrity validation completed successfully")
+	return nil
+}
+
+// AddNote adds a note to an existing command record
+func (ss *SecureStorage) AddNote(recordID int64, note string) error {
+	if err := ss.checkAccess(); err != nil {
+		return err
+	}
+
+	if recordID <= 0 {
+		return fmt.Errorf("invalid record ID: %d", recordID)
+	}
+
+	if len(strings.TrimSpace(note)) > storage.MaxNoteLength {
+		return fmt.Errorf("note exceeds maximum length of %d characters", storage.MaxNoteLength)
+	}
+
+	// Get the existing record
+	record, err := ss.getRecordByID(recordID)
+	if err != nil {
+		return fmt.Errorf("failed to get record: %w", err)
+	}
+
+	// Set the note
+	if err := record.SetNote(note); err != nil {
+		return fmt.Errorf("failed to set note: %w", err)
+	}
+
+	// Update the record
+	if err := ss.updateRecord(record); err != nil {
+		return fmt.Errorf("failed to update record with note: %w", err)
+	}
+
+	ss.logger.WithFields(map[string]interface{}{
+		"record_id":   recordID,
+		"note_length": len(strings.TrimSpace(note)),
+	}).Info().Msg("Note added to command record")
+
+	return nil
+}
+
+// GetNote retrieves the note for a specific command record
+func (ss *SecureStorage) GetNote(recordID int64) (string, error) {
+	if err := ss.checkAccess(); err != nil {
+		return "", err
+	}
+
+	if recordID <= 0 {
+		return "", fmt.Errorf("invalid record ID: %d", recordID)
+	}
+
+	record, err := ss.getRecordByID(recordID)
+	if err != nil {
+		return "", fmt.Errorf("failed to get record: %w", err)
+	}
+
+	return record.Note, nil
+}
+
+// UpdateNote updates the note for an existing command record
+func (ss *SecureStorage) UpdateNote(recordID int64, note string) error {
+	if err := ss.checkAccess(); err != nil {
+		return err
+	}
+
+	if recordID <= 0 {
+		return fmt.Errorf("invalid record ID: %d", recordID)
+	}
+
+	if len(strings.TrimSpace(note)) > storage.MaxNoteLength {
+		return fmt.Errorf("note exceeds maximum length of %d characters", storage.MaxNoteLength)
+	}
+
+	// Get the existing record
+	record, err := ss.getRecordByID(recordID)
+	if err != nil {
+		return fmt.Errorf("failed to get record: %w", err)
+	}
+
+	// Update the note
+	if err := record.SetNote(note); err != nil {
+		return fmt.Errorf("failed to set note: %w", err)
+	}
+
+	// Update the record
+	if err := ss.updateRecord(record); err != nil {
+		return fmt.Errorf("failed to update record with note: %w", err)
+	}
+
+	ss.logger.WithFields(map[string]interface{}{
+		"record_id":   recordID,
+		"note_length": len(strings.TrimSpace(note)),
+	}).Info().Msg("Note updated for command record")
+
+	return nil
+}
+
+// DeleteNote removes the note from a command record
+func (ss *SecureStorage) DeleteNote(recordID int64) error {
+	if err := ss.checkAccess(); err != nil {
+		return err
+	}
+
+	if recordID <= 0 {
+		return fmt.Errorf("invalid record ID: %d", recordID)
+	}
+
+	// Get the existing record
+	record, err := ss.getRecordByID(recordID)
+	if err != nil {
+		return fmt.Errorf("failed to get record: %w", err)
+	}
+
+	// Clear the note
+	record.ClearNote()
+
+	// Update the record
+	if err := ss.updateRecord(record); err != nil {
+		return fmt.Errorf("failed to update record after deleting note: %w", err)
+	}
+
+	ss.logger.WithFields(map[string]interface{}{
+		"record_id": recordID,
+	}).Info().Msg("Note deleted from command record")
+
+	return nil
+}
+
+// HasNote checks if a command record has a note
+func (ss *SecureStorage) HasNote(recordID int64) (bool, error) {
+	if err := ss.checkAccess(); err != nil {
+		return false, err
+	}
+
+	if recordID <= 0 {
+		return false, fmt.Errorf("invalid record ID: %d", recordID)
+	}
+
+	record, err := ss.getRecordByID(recordID)
+	if err != nil {
+		return false, fmt.Errorf("failed to get record: %w", err)
+	}
+
+	return record.HasNote(), nil
+}
+
+// SearchNotes searches for commands that contain notes matching the query
+func (ss *SecureStorage) SearchNotes(query string, opts *QueryOptions) (*RetrieveResult, error) {
+	if err := ss.checkAccess(); err != nil {
+		return nil, err
+	}
+
+	if strings.TrimSpace(query) == "" {
+		return nil, fmt.Errorf("search query cannot be empty")
+	}
+
+	// Get all records (we need to decrypt to search notes)
+	allRecords, err := ss.Retrieve(opts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve records: %w", err)
+	}
+
+	// Filter records that have notes matching the query
+	var matchingRecords []*storage.CommandRecord
+	query = strings.ToLower(strings.TrimSpace(query))
+
+	for _, record := range allRecords.Records {
+		if record.HasNote() {
+			noteText := strings.ToLower(record.Note)
+			if strings.Contains(noteText, query) {
+				matchingRecords = append(matchingRecords, record)
+			}
+		}
+	}
+
+	result := &RetrieveResult{
+		Records:    matchingRecords,
+		TotalCount: int64(len(matchingRecords)),
+		HasMore:    false,
+	}
+
+	ss.logger.WithFields(map[string]interface{}{
+		"query":         query,
+		"total_records": allRecords.TotalCount,
+		"matches":       len(matchingRecords),
+	}).Info().Msg("Note search completed")
+
+	return result, nil
+}
+
+// GetNotesContaining returns all records with notes containing the specified text
+func (ss *SecureStorage) GetNotesContaining(searchText string, opts *QueryOptions) (*RetrieveResult, error) {
+	return ss.SearchNotes(searchText, opts)
+}
+
+// GetAllNotedCommands returns all commands that have notes
+func (ss *SecureStorage) GetAllNotedCommands(opts *QueryOptions) (*RetrieveResult, error) {
+	if err := ss.checkAccess(); err != nil {
+		return nil, err
+	}
+
+	// Get all records
+	allRecords, err := ss.Retrieve(opts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve records: %w", err)
+	}
+
+	// Filter records that have notes
+	var notedRecords []*storage.CommandRecord
+	for _, record := range allRecords.Records {
+		if record.HasNote() {
+			notedRecords = append(notedRecords, record)
+		}
+	}
+
+	result := &RetrieveResult{
+		Records:    notedRecords,
+		TotalCount: int64(len(notedRecords)),
+		HasMore:    false,
+	}
+
+	ss.logger.WithFields(map[string]interface{}{
+		"total_records": allRecords.TotalCount,
+		"noted_records": len(notedRecords),
+	}).Info().Msg("Retrieved all noted commands")
+
+	return result, nil
+}
+
+// getRecordByID retrieves a single record by ID
+func (ss *SecureStorage) getRecordByID(recordID int64) (*storage.CommandRecord, error) {
+
+	// Query the database for the specific record
+	query := `SELECT id, encrypted_data, timestamp, session, hostname, created_at
+			  FROM history WHERE id = ? LIMIT 1`
+
+	row := ss.db.GetDB().QueryRow(query, recordID)
+
+	var encRecord storage.EncryptedHistoryRecord
+	err := row.Scan(&encRecord.ID, &encRecord.EncryptedData, &encRecord.Timestamp,
+		&encRecord.Session, &encRecord.Hostname, &encRecord.CreatedAt)
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("record not found with ID %d", recordID)
+		}
+		return nil, fmt.Errorf("failed to query record: %w", err)
+	}
+
+	// Decrypt the record
+	decryptedData, err := ss.encryptor.DecryptBytes(encRecord.EncryptedData, ss.currentSession.Key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decrypt record: %w", err)
+	}
+
+	// Parse the JSON
+	var record storage.CommandRecord
+	if err := json.Unmarshal(decryptedData, &record); err != nil {
+		return nil, fmt.Errorf("failed to parse record JSON: %w", err)
+	}
+
+	// Set the ID from the database
+	record.ID = encRecord.ID
+
+	return &record, nil
+}
+
+// updateRecord updates an existing record in the database
+func (ss *SecureStorage) updateRecord(record *storage.CommandRecord) error {
+	if record.ID <= 0 {
+		return fmt.Errorf("invalid record ID: %d", record.ID)
+	}
+
+	// Validate the record
+	if !record.IsValid() {
+		return fmt.Errorf("invalid record data")
+	}
+
+	// Ensure note is within limits
+	if !record.IsNoteValid() {
+		return fmt.Errorf("note exceeds maximum length")
+	}
+
+	// Generate hash if using sync
+	if ss.recordHashProvider != nil {
+		record.RecordHash = ss.recordHashProvider.GenerateRecordHash(record)
+	}
+
+	// Set device ID if available
+	if ss.deviceIDProvider != nil {
+		if deviceID, err := ss.deviceIDProvider.GetDeviceID(); err == nil {
+			record.DeviceID = deviceID
+		}
+	}
+
+	// Reset sync status since we're updating
+	record.SyncStatus = storage.SyncStatusLocal
+	record.LastSynced = nil
+
+	// Serialize to JSON
+	jsonData, err := json.Marshal(record)
+	if err != nil {
+		return fmt.Errorf("failed to serialize record: %w", err)
+	}
+
+	// Encrypt the data
+	encryptedData, err := ss.encryptor.EncryptBytes(jsonData, ss.currentSession.Key)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt record: %w", err)
+	}
+
+	// Update in database
+	query := `UPDATE history
+			  SET encrypted_data = ?, record_hash = ?, device_id = ?, sync_status = ?, last_synced = ?
+			  WHERE id = ?`
+
+	_, err = ss.db.GetDB().Exec(query, encryptedData, record.RecordHash, record.DeviceID,
+		record.SyncStatus, record.LastSynced, record.ID)
+
+	if err != nil {
+		return fmt.Errorf("failed to update record in database: %w", err)
+	}
+
+	// Update stats
+	ss.stats.mu.Lock()
+	ss.stats.BytesEncrypted += int64(len(encryptedData))
+	ss.stats.LastOperation = time.Now()
+	ss.stats.mu.Unlock()
+
 	return nil
 }
 
