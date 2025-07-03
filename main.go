@@ -749,7 +749,7 @@ func searchCmd(cfg *config.Config) *cobra.Command {
 		Use:   "search [query]",
 		Short: "Search command history",
 		Long: `Search through your encrypted command history with optional filters.
-Use without arguments to open the interactive TUI search interface.`,
+Use without arguments to search all commands. Use --tui flag to open interactive interface.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			log := logger.GetLogger().WithComponent("search")
 
@@ -842,25 +842,8 @@ Use without arguments to open the interactive TUI search interface.`,
 				log.Warn().Err(err).Msg("Failed to initialize search service")
 			}
 
-			// Only launch TUI if no query AND no time filters AND no other search flags
-			// Check if user provided search intent flags that suggest CLI search
-			hasSearchFlags := directory != "" || hostname != "" || sessionID != "" ||
-				exitCode != -1 || exactMatch || verboseOutput ||
-				cmd.Flags().Changed("limit") // Check if limit was explicitly set
-
-			if len(args) == 0 && sinceStr == "" && untilStr == "" && !hasSearchFlags {
-				log.Info().Msg("Launching interactive TUI search")
-
-				// Create TUI options with defaults
-				opts := &tui.TUIOptions{
-					InitialQuery: "",
-					FuzzyEnabled: true,
-					MaxResults:   cfg.Cache.HotCacheSize,
-				}
-
-				// Launch TUI interface
-				return tui.Launch(cfg, opts)
-			}
+			// TUI is only launched when explicitly requested with --tui flag
+			// Default behavior is always CLI search, even with empty query
 
 			var query string
 			if len(args) > 0 {
