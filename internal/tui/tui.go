@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -341,7 +342,7 @@ type model struct {
 	searchInput textinput.Model
 	list        list.Model
 	help        help.Model
-	noteEditor  textinput.Model
+	noteEditor  textarea.Model
 
 	// State
 	mode            TUIMode
@@ -399,6 +400,13 @@ type model struct {
 	noteEditSuccess     bool
 	noteEditError       error
 
+	// Phase 3: Combined search state
+	combinedSearchMode bool
+	keySequenceState   string
+	keySequenceTimeout time.Time
+	searchNotesOnly    bool
+	searchHighlights   map[string][]string
+
 	// Key bindings
 	keys keyMap
 }
@@ -447,11 +455,12 @@ func newModel(session *TUISession, opts *TUIOptions) model {
 	ti.SetValue(opts.InitialQuery)
 
 	// Initialize note editor
-	noteEditor := textinput.New()
+	noteEditor := textarea.New()
 	noteEditor.Placeholder = "Enter your note here... (max 1000 characters)"
 	noteEditor.CharLimit = 1000
-	noteEditor.Prompt = ""
-	noteEditor.Width = 80
+	noteEditor.ShowLineNumbers = false
+	noteEditor.SetWidth(80)
+	noteEditor.SetHeight(8)
 
 	// Initialize list
 	items := []list.Item{}
@@ -519,6 +528,7 @@ func newModel(session *TUISession, opts *TUIOptions) model {
 		extendedTimestamps: make(map[string][]int64),
 		sessionWorkingSet:  make([]*storage.CommandRecord, 0),
 		maxWorkingSetSize:  session.config.Cache.HotCacheSize * 10, // Allow 10x cache size in working set
+		searchHighlights:   make(map[string][]string),
 	}
 }
 
@@ -551,6 +561,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		m.list.SetSize(m.width-4, listHeight)
 		m.searchInput.Width = m.width - 20
+
+		// Update note editor dimensions
+		if m.width > 20 {
+			m.noteEditor.SetWidth(m.width - 12)
+		}
 
 		// Update stats components if in stats mode
 		if m.mode == ModeStats {
@@ -620,6 +635,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		default:
 			return m.handleSearchKeys(msg)
 		}
+
+	case keySequenceTimeoutMsg:
+		// Reset key sequence state on timeout
+		if time.Now().After(m.keySequenceTimeout) {
+			if m.keySequenceState == "ctrl+f" {
+				// Complete the regular fuzzy toggle if sequence timed out
+				m.fuzzyEnabled = !m.fuzzyEnabled
+				m.session.logger.Info().
+					Bool("fuzzy_enabled", m.fuzzyEnabled).
+					Str("current_query", m.searchInput.Value()).
+					Msg("Toggled fuzzy search - performing new search")
+				m.keySequenceState = ""
+				return m, m.performSearch()
+			}
+			m.keySequenceState = ""
+		}
+		return m, nil
 
 	case searchResultMsg:
 		m.loading = false
@@ -725,6 +757,9 @@ func (m model) View() string {
 	}
 }
 
+// keySequenceTimeoutMsg represents a timeout for compound key sequences
+type keySequenceTimeoutMsg struct{}
+
 // renderSearch renders the main search interface
 func (m model) renderSearch() string {
 	var topSections []string
@@ -760,8 +795,8 @@ func (m model) renderSearch() string {
 	}
 
 	// Create exactly two lines of help text with proper styling
-	line1 := "↑/↓: navigate • enter: copy • ctrl+j: execute • tab: details • ctrl+f: fuzzy • ctrl+s: success only"
-	line2 := "ctrl+x: failures • ctrl+t: stats • ctrl+k: clear • ctrl+l: refresh • ?: help • ctrl+c/esc: quit"
+	line1 := "↑/↓: navigate • enter: copy • ctrl+j: execute • tab: details • ctrl+f: fuzzy • ctrl+n: notes"
+	line2 := "ctrl+f+n: combined search • ctrl+s/x: filters • ctrl+t: stats • ?: help • ctrl+c/esc: quit"
 	helpView := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("8")).
 		MarginLeft(2).
@@ -860,6 +895,9 @@ func (m model) renderSearchInput() string {
 	}
 	if !m.syntaxEnabled {
 		indicators = append(indicators, lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render("NO-SYNTAX"))
+	}
+	if m.combinedSearchMode {
+		indicators = append(indicators, lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render("N+C"))
 	}
 
 	searchContent := m.searchInput.View()
@@ -975,12 +1013,15 @@ func (m model) handleSearchKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = ModeHelp
 
 	case key.Matches(msg, m.keys.Fuzzy):
-		m.fuzzyEnabled = !m.fuzzyEnabled
-		m.session.logger.Info().
-			Bool("fuzzy_enabled", m.fuzzyEnabled).
-			Str("current_query", m.searchInput.Value()).
-			Msg("Toggled fuzzy search - performing new search")
-		return m, m.performSearch()
+		// Handle compound key sequence for combined search
+		if m.keySequenceState == "" {
+			// Start key sequence tracking
+			m.keySequenceState = "ctrl+f"
+			m.keySequenceTimeout = time.Now().Add(2 * time.Second)
+			return m, tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
+				return keySequenceTimeoutMsg{}
+			})
+		}
 
 	case key.Matches(msg, m.keys.Syntax):
 		m.syntaxEnabled = !m.syntaxEnabled
@@ -1018,7 +1059,19 @@ func (m model) handleSearchKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case key.Matches(msg, m.keys.NoteEdit):
-		// Edit note for the currently selected record
+		// Handle compound key sequence or direct note editing
+		if m.keySequenceState == "ctrl+f" && time.Now().Before(m.keySequenceTimeout) {
+			// Complete the ctrl+f+n sequence for combined search
+			m.keySequenceState = ""
+			m.combinedSearchMode = !m.combinedSearchMode
+			m.session.logger.Info().
+				Bool("combined_search_mode", m.combinedSearchMode).
+				Str("current_query", m.searchInput.Value()).
+				Msg("Toggled combined notes+commands search")
+			return m, m.performSearch()
+		}
+
+		// Regular note editing
 		if len(m.list.Items()) > 0 {
 			if item, ok := m.list.SelectedItem().(CommandItem); ok {
 				return m.enterNoteEditMode(item.record)
@@ -1169,8 +1222,10 @@ func (m model) enterNoteEditMode(record *storage.CommandRecord) (tea.Model, tea.
 	m.noteEditError = nil
 	m.noteEditSuccess = false
 
-	// Set up the note editor with current note content
+	// Set up the note editor with current note content and proper sizing
 	m.noteEditor.SetValue(record.Note)
+	m.noteEditor.SetWidth(m.width - 12) // Account for margins and borders
+	m.noteEditor.SetHeight(8)
 	m.noteEditor.Focus()
 
 	return m, nil
@@ -1181,14 +1236,14 @@ func (m model) handleNoteEditKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 
 	switch msg.String() {
-	case "enter", "ctrl+s":
+	case "ctrl+s":
 		// Save the note
 		return m.saveNote()
 	case "esc":
 		// Cancel note editing (handled in main Update method)
 		return m, nil
 	default:
-		// Handle regular text input
+		// Handle regular text input (including Enter for new lines)
 		m.noteEditor, cmd = m.noteEditor.Update(msg)
 		return m, cmd
 	}
@@ -1296,9 +1351,12 @@ func (m model) renderNoteEdit() string {
 		Render("Note:")
 	content.WriteString(noteTitle + "\n")
 
-	// Note input field
+	// Note input field - textarea with proper sizing
 	noteInput := lipgloss.NewStyle().
 		MarginLeft(4).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("8")).
+		Padding(1).
 		Render(m.noteEditor.View())
 	content.WriteString(noteInput + "\n\n")
 
@@ -1341,7 +1399,7 @@ func (m model) renderNoteEdit() string {
 	footer := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("8")).
 		MarginLeft(2).
-		Render("Enter/Ctrl+S: save • Esc: cancel")
+		Render("Ctrl+S: save • Esc: cancel • Enter: new line")
 	content.WriteString(footer)
 
 	return content.String()
@@ -1370,15 +1428,25 @@ func (m model) renderHelp() string {
 
 Notes:
   ctrl+n     Edit note for selected command
+  ctrl+f+n   Toggle combined notes+commands search
+
+  In Note Editor:
+  enter      New line
+  ctrl+s     Save note
+  esc        Cancel editing
 
 Search:
   Type anything to search (all letters/numbers work!)
-  ctrl+f     Toggle fuzzy search mode
+  ctrl+f     Toggle fuzzy search mode (or start ctrl+f+n sequence)
   ctrl+s     Toggle success-only filter
   ctrl+x     Toggle failure-only filter
   ctrl+k     Clear search input
   ctrl+l     Refresh search results
   ctrl+t     Show statistics view
+
+Combined Search:
+  When N+C mode is active, searches both command text
+  and note content simultaneously. Results show where matches were found.
 
 Time Search:
   1h         Commands from last hour
@@ -1543,11 +1611,65 @@ func (m model) renderDetails() string {
 			Render("Note:")
 		content.WriteString(noteTitle + "\n")
 
-		noteText := lipgloss.NewStyle().
+		// Handle multi-line notes with proper wrapping
+		noteLines := strings.Split(record.Note, "\n")
+		noteStyle := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("15")).
-			MarginLeft(4).
-			Render(record.Note)
-		content.WriteString(noteText + "\n")
+			MarginLeft(4)
+
+		// Calculate available width for note wrapping
+		availableWidth := m.width - 8 // Account for margins
+		if availableWidth < 40 {
+			availableWidth = 40 // Minimum width
+		}
+
+		for _, line := range noteLines {
+			if line == "" {
+				content.WriteString(noteStyle.Render("") + "\n")
+				continue
+			}
+
+			// Word wrap long lines
+			if len(line) <= availableWidth {
+				content.WriteString(noteStyle.Render(line) + "\n")
+			} else {
+				// Split into words and wrap
+				words := strings.Fields(line)
+				currentLine := ""
+
+				for _, word := range words {
+					// Check if the word itself is longer than available width
+					if len(word) > availableWidth {
+						// Break long words
+						if currentLine != "" {
+							content.WriteString(noteStyle.Render(currentLine) + "\n")
+							currentLine = ""
+						}
+						for len(word) > availableWidth {
+							content.WriteString(noteStyle.Render(word[:availableWidth]) + "\n")
+							word = word[availableWidth:]
+						}
+						if len(word) > 0 {
+							currentLine = word
+						}
+					} else if len(currentLine)+len(word)+1 <= availableWidth {
+						if currentLine != "" {
+							currentLine += " "
+						}
+						currentLine += word
+					} else {
+						if currentLine != "" {
+							content.WriteString(noteStyle.Render(currentLine) + "\n")
+						}
+						currentLine = word
+					}
+				}
+
+				if currentLine != "" {
+					content.WriteString(noteStyle.Render(currentLine) + "\n")
+				}
+			}
+		}
 	}
 
 	// Footer
@@ -2220,6 +2342,9 @@ func (m model) performSearch() tea.Cmd {
 		// Use the remaining query after time expression removal
 		effectiveQuery := timeFilter.OriginalQuery
 
+		// Set default search limit
+		searchLimit := m.session.config.Cache.HotCacheSize
+
 		// Debug logging
 		m.session.logger.Debug().
 			Str("original_query", query).
@@ -2278,7 +2403,6 @@ func (m model) performSearch() tea.Cmd {
 			m.session.logger.Debug().Msg("Using empty query to fetch recent commands")
 		} else {
 			// Use larger limit when we have a working set to search beyond current records
-			searchLimit := m.session.config.Cache.HotCacheSize
 			if len(m.sessionWorkingSet) > 0 {
 				searchLimit = max(searchLimit*3, len(m.sessionWorkingSet)+50) // Search beyond working set
 			}
@@ -2296,22 +2420,87 @@ func (m model) performSearch() tea.Cmd {
 				Str("effective_query", effectiveQuery).
 				Bool("fuzzy", m.fuzzyEnabled).
 				Bool("has_time_filter", timeFilter.HasTimeFilter).
+				Bool("combined_search", m.combinedSearchMode).
 				Msg("Using specific query with time filter")
 		}
 
-		m.session.logger.Debug().
-			Bool("fuzzy_enabled", req.UseFuzzySearch).
-			Str("query", query).
-			Int("limit", req.Limit).
-			Msg("Calling search service")
-		response, err := m.session.searchService.Search(req)
-		if err != nil {
-			m.session.logger.Error().
-				Err(err).
-				Str("query", query).
+		// Handle combined search mode
+		var response *search.SearchResponse
+		var err error
+		var noteMatches []*storage.CommandRecord
+
+		if m.combinedSearchMode && effectiveQuery != "" {
+			m.session.logger.Debug().
+				Str("query", effectiveQuery).
+				Msg("Performing combined notes+commands search")
+
+			// First, search commands normally
+			m.session.logger.Debug().
 				Bool("fuzzy_enabled", req.UseFuzzySearch).
-				Msg("Search operation failed")
-			return searchResultMsg{err: fmt.Errorf("search failed: %w", err), timeFilter: timeFilter}
+				Str("query", query).
+				Int("limit", req.Limit).
+				Msg("Calling search service for commands")
+			response, err = m.session.searchService.Search(req)
+			if err != nil {
+				m.session.logger.Error().
+					Err(err).
+					Str("query", query).
+					Bool("fuzzy_enabled", req.UseFuzzySearch).
+					Msg("Command search failed")
+				return searchResultMsg{err: fmt.Errorf("command search failed: %w", err), timeFilter: timeFilter}
+			}
+
+			// Then, search notes specifically
+			noteSearchResult, err := m.session.storage.SearchNotes(effectiveQuery, &securestorage.QueryOptions{
+				Limit:  searchLimit,
+				Offset: 0,
+			})
+			if err != nil {
+				m.session.logger.Warn().
+					Err(err).
+					Str("query", effectiveQuery).
+					Msg("Note search failed, continuing with command results only")
+			} else {
+				noteMatches = noteSearchResult.Records
+				m.session.logger.Debug().
+					Int("note_matches", len(noteMatches)).
+					Msg("Found note matches")
+			}
+
+			// Merge results, avoiding duplicates
+			commandIDs := make(map[int64]bool)
+			for _, record := range response.Records {
+				commandIDs[record.ID] = true
+			}
+
+			// Add note matches that aren't already in command results
+			for _, noteRecord := range noteMatches {
+				if !commandIDs[noteRecord.ID] {
+					response.Records = append(response.Records, noteRecord)
+				}
+			}
+
+			m.session.logger.Debug().
+				Int("total_combined_results", len(response.Records)).
+				Int("command_matches", len(response.Records)-len(noteMatches)).
+				Int("note_matches", len(noteMatches)).
+				Msg("Combined search completed")
+		} else {
+			// Regular search
+			m.session.logger.Debug().
+				Bool("fuzzy_enabled", req.UseFuzzySearch).
+				Str("query", query).
+				Int("limit", req.Limit).
+				Msg("Calling search service")
+			response, err = m.session.searchService.Search(req)
+			if err != nil {
+				m.session.logger.Error().
+					Err(err).
+					Str("query", query).
+					Bool("fuzzy_enabled", req.UseFuzzySearch).
+					Msg("Search operation failed")
+				return searchResultMsg{err: fmt.Errorf("search failed: %w", err), timeFilter: timeFilter}
+			}
 		}
 
 		m.session.logger.Debug().
