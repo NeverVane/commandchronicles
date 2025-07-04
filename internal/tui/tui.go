@@ -639,16 +639,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case keySequenceTimeoutMsg:
 		// Reset key sequence state on timeout
 		if time.Now().After(m.keySequenceTimeout) {
-			if m.keySequenceState == "ctrl+f" {
-				// Complete the regular fuzzy toggle if sequence timed out
-				m.fuzzyEnabled = !m.fuzzyEnabled
-				m.session.logger.Info().
-					Bool("fuzzy_enabled", m.fuzzyEnabled).
-					Str("current_query", m.searchInput.Value()).
-					Msg("Toggled fuzzy search - performing new search")
-				m.keySequenceState = ""
-				return m, m.performSearch()
-			}
+			// Just clear the sequence state - fuzzy toggle already happened immediately
 			m.keySequenceState = ""
 		}
 		return m, nil
@@ -1013,15 +1004,26 @@ func (m model) handleSearchKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = ModeHelp
 
 	case key.Matches(msg, m.keys.Fuzzy):
-		// Handle compound key sequence for combined search
+		// Immediately toggle fuzzy search (preserve original behavior)
+		m.fuzzyEnabled = !m.fuzzyEnabled
+		m.session.logger.Info().
+			Bool("fuzzy_enabled", m.fuzzyEnabled).
+			Str("current_query", m.searchInput.Value()).
+			Msg("Toggled fuzzy search - performing new search")
+
+		// Also start key sequence tracking for potential Ctrl+F+N combination
 		if m.keySequenceState == "" {
-			// Start key sequence tracking
 			m.keySequenceState = "ctrl+f"
 			m.keySequenceTimeout = time.Now().Add(2 * time.Second)
-			return m, tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
-				return keySequenceTimeoutMsg{}
-			})
+			// Start timeout ticker and perform search
+			return m, tea.Batch(
+				m.performSearch(),
+				tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
+					return keySequenceTimeoutMsg{}
+				}),
+			)
 		}
+		return m, m.performSearch()
 
 	case key.Matches(msg, m.keys.Syntax):
 		m.syntaxEnabled = !m.syntaxEnabled
@@ -1062,10 +1064,13 @@ func (m model) handleSearchKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Handle compound key sequence or direct note editing
 		if m.keySequenceState == "ctrl+f" && time.Now().Before(m.keySequenceTimeout) {
 			// Complete the ctrl+f+n sequence for combined search
+			// First undo the fuzzy toggle that just happened
+			m.fuzzyEnabled = !m.fuzzyEnabled
 			m.keySequenceState = ""
 			m.combinedSearchMode = !m.combinedSearchMode
 			m.session.logger.Info().
 				Bool("combined_search_mode", m.combinedSearchMode).
+				Bool("fuzzy_enabled", m.fuzzyEnabled).
 				Str("current_query", m.searchInput.Value()).
 				Msg("Toggled combined notes+commands search")
 			return m, m.performSearch()
