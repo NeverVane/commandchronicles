@@ -2,7 +2,7 @@
 
 ```
 ===================================================================
-                CommandChronicles CLI (ccr) v0.1.0
+                CommandChronicles CLI (ccr) v0.2.0
 ===================================================================
 
   🚀 A modern shell history management tool that supercharges
@@ -14,7 +14,7 @@
 
 <p align="center">
   <a href="https://github.com/NeverVane/commandchronicles/releases">
-    <img src="https://img.shields.io/badge/version-0.1.0-blue.svg" alt="Version">
+    <img src="https://img.shields.io/badge/version-0.2.0-blue.svg" alt="Version">
   </a>
   <a href="LICENSE">
     <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License">
@@ -30,6 +30,7 @@
 
 - 🔐 **Military-grade encryption** (XChaCha20-Poly1305) for your command history
 - 🔍 **Blazing-fast fuzzy search** with real-time interactive TUI (Ctrl+R)
+- 📝 **Rich note system** for annotating commands with context and explanations
 - 📊 **Rich command metadata** (exit codes, duration, working directory, git info)
 - 🐚 **Seamless shell integration** for bash and zsh with automatic setup
 - 🔑 **Secure key derivation** (Argon2id) and session management
@@ -95,6 +96,8 @@ Press `Ctrl+R` in your shell to launch the interactive TUI search interface.
 - `Ctrl+J` - Execute command immediately
 - `Tab` - View detailed command information
 - `Ctrl+F` - Toggle fuzzy search
+- `Ctrl+F+N` - Toggle combined notes+commands search
+- `Ctrl+N` - Edit note for selected command
 - `Ctrl+S` - Show only successful commands
 - `Ctrl+X` - Show only failed commands
 - `Ctrl+T` - View statistics
@@ -107,6 +110,8 @@ Press `Ctrl+R` in your shell to launch the interactive TUI search interface.
 - **Direct TUI Calls**: Running `ccr tui` directly will show the interface but cannot inject commands into your shell
 - **Recommended Usage**: Always use `Ctrl+R` for interactive command search and selection
 - **Installation**: Run `ccr install-hooks` to enable full TUI functionality
+- **Note Editing**: Use `Ctrl+N` to edit notes directly in the TUI interface
+- **Combined Search**: Use `Ctrl+F+N` to search both commands and notes simultaneously
 
 ### Command Line Search
 
@@ -126,6 +131,73 @@ ccr search --directory /project "npm"
 # Filter by time
 ccr search --since 1h "build"
 ccr search --since 2d --until 1d "test"
+```
+
+### Note System
+
+CommandChronicles includes a comprehensive note system for annotating your commands with context, explanations, and reminders.
+
+```bash
+# Add a note to a command (use command ID from search results)
+ccr note add 123 "This command deploys to production"
+
+# Edit an existing note
+ccr note edit 123 "Updated: This command deploys to staging environment"
+
+# View a note
+ccr note show 123
+
+# List all commands with notes
+ccr note list
+
+# Search within notes
+ccr note search "deployment"
+
+# Delete a note
+ccr note delete 123
+```
+
+**Note Features:**
+- **Multi-line support**: Notes can span multiple lines with proper formatting
+- **Character limit**: 1000 characters maximum per note
+- **Encrypted storage**: Notes are encrypted alongside command data
+- **Visual indicators**: Commands with notes show a colored dot (●) in the TUI
+- **Integrated search**: Use `Ctrl+F+N` in TUI for combined command+note searching
+- **Rich editing**: Full-featured note editor with word wrapping in TUI
+
+**TUI Note Editing:**
+- Press `Ctrl+N` on any command to open the note editor
+- **Multi-line editing**: Press `Enter` for new lines, `Ctrl+S` to save, `Esc` to cancel
+- **Real-time validation**: Character count display with 1000 character limit
+- **Word wrapping**: Automatic text wrapping for long content
+- **Visual feedback**: Commands with notes show a colored indicator (●) in the list
+- **Responsive design**: Editor adapts to terminal size automatically
+
+## 📋 Quick Reference
+
+### Note Commands
+```bash
+ccr note add <id> <note>     # Add note to command
+ccr note edit <id> <note>    # Edit existing note
+ccr note delete <id>         # Remove note
+ccr note show <id>           # Display note
+ccr note list                # List all noted commands
+ccr note search <query>      # Search within notes
+```
+
+### TUI Shortcuts
+```
+Ctrl+R         Launch interactive TUI
+Ctrl+F         Toggle fuzzy search
+Ctrl+F+N       Toggle combined notes+commands search
+Ctrl+N         Edit note for selected command
+Tab            View command details (including notes)
+Enter          Copy command to shell
+Ctrl+J         Execute command immediately
+Ctrl+S         Filter successful commands only
+Ctrl+X         Filter failed commands only
+?              Show help
+Esc/Ctrl+C     Exit
 ```
 
 ### Statistics
@@ -184,6 +256,11 @@ argon2_memory = 65536     # Argon2 memory parameter (KB)
 auto_install = false      # Auto-install shell integration
 graceful_degradation = true # Fallback if ccr is unavailable
 
+[notes]
+max_length = 1000         # Maximum characters per note
+enable_search = true      # Enable note content searching
+show_indicators = true    # Show note indicators in TUI
+
 [tui]
 animations = true         # Enable TUI animations
 color_scheme = "auto"     # Color scheme: auto, dark, light
@@ -199,6 +276,17 @@ CommandChronicles takes your privacy seriously:
 - Session keys are stored securely with configurable timeouts
 - All data is stored locally - no cloud services or telemetry ( optional )
 - Secure memory handling prevents sensitive data from being swapped to disk
+
+## 🎯 Use Cases
+
+CommandChronicles with notes is perfect for:
+
+- **DevOps workflows**: Document deployment commands with environment details
+- **Complex commands**: Add context to long docker, kubectl, or database commands
+- **Learning**: Annotate commands you're learning with explanations
+- **Team collaboration**: Share documented command snippets with colleagues
+- **Troubleshooting**: Note solutions and context for debugging commands
+- **Project documentation**: Keep command documentation alongside your history
 
 ## 🤝 Contributing
 
