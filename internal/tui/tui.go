@@ -47,6 +47,7 @@ const (
 	ModeStats
 	ModeDeleteConfirm
 	ModeWipeConfirm
+	ModeNoteEdit
 )
 
 // TUISession represents an active TUI session with all required services
@@ -195,7 +196,13 @@ func (i CommandItem) Title() string {
 		}
 	}
 
-	leftPart := cursor + statusStyle.Render(status) + " " + commandStyle.Render(commandText)
+	// Add note indicator if command has a note
+	noteIndicator := ""
+	if i.record.Note != "" {
+		noteIndicator = lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render("● ")
+	}
+
+	leftPart := cursor + statusStyle.Render(status) + " " + noteIndicator + commandStyle.Render(commandText)
 	rightPart := timeStyle.Render(timeText)
 
 	// Use lipgloss to create proper spacing for right alignment
@@ -220,24 +227,25 @@ func (i CommandItem) Description() string {
 
 // keyMap defines key bindings
 type keyMap struct {
-	Up      key.Binding
-	Down    key.Binding
-	Left    key.Binding
-	Right   key.Binding
-	Help    key.Binding
-	Quit    key.Binding
-	Enter   key.Binding
-	Execute key.Binding
-	Tab     key.Binding
-	Fuzzy   key.Binding
-	Syntax  key.Binding
-	Success key.Binding
-	Failure key.Binding
-	Clear   key.Binding
-	Refresh key.Binding
-	Stats   key.Binding
-	Delete  key.Binding
-	Wipe    key.Binding
+	Up       key.Binding
+	Down     key.Binding
+	Left     key.Binding
+	Right    key.Binding
+	Help     key.Binding
+	Quit     key.Binding
+	Enter    key.Binding
+	Execute  key.Binding
+	Tab      key.Binding
+	Fuzzy    key.Binding
+	Syntax   key.Binding
+	Success  key.Binding
+	Failure  key.Binding
+	Clear    key.Binding
+	Refresh  key.Binding
+	Stats    key.Binding
+	Delete   key.Binding
+	Wipe     key.Binding
+	NoteEdit key.Binding
 }
 
 func (k keyMap) ShortHelp() []key.Binding {
@@ -249,7 +257,7 @@ func (k keyMap) FullHelp() [][]key.Binding {
 		{k.Up, k.Down, k.Enter, k.Execute, k.Tab},
 		{k.Fuzzy, k.Syntax, k.Success, k.Failure},
 		{k.Clear, k.Refresh, k.Stats, k.Delete, k.Wipe},
-		{k.Help, k.Quit},
+		{k.NoteEdit, k.Help, k.Quit},
 	}
 }
 
@@ -318,6 +326,10 @@ var keys = keyMap{
 		key.WithKeys("ctrl+w"),
 		key.WithHelp("ctrl+w", "wipe all"),
 	),
+	NoteEdit: key.NewBinding(
+		key.WithKeys("ctrl+n"),
+		key.WithHelp("ctrl+n", "edit note"),
+	),
 }
 
 // model represents the TUI state using bubbles components
@@ -329,6 +341,7 @@ type model struct {
 	searchInput textinput.Model
 	list        list.Model
 	help        help.Model
+	noteEditor  textinput.Model
 
 	// State
 	mode            TUIMode
@@ -379,6 +392,13 @@ type model struct {
 	sessionWorkingSet []*storage.CommandRecord
 	maxWorkingSetSize int
 
+	// Note editing state
+	noteEditingRecordID int64
+	noteEditingRecord   *storage.CommandRecord
+	noteEditOriginal    string
+	noteEditSuccess     bool
+	noteEditError       error
+
 	// Key bindings
 	keys keyMap
 }
@@ -425,6 +445,13 @@ func newModel(session *TUISession, opts *TUIOptions) model {
 	ti.Prompt = ""
 	ti.Width = 50
 	ti.SetValue(opts.InitialQuery)
+
+	// Initialize note editor
+	noteEditor := textinput.New()
+	noteEditor.Placeholder = "Enter your note here... (max 1000 characters)"
+	noteEditor.CharLimit = 1000
+	noteEditor.Prompt = ""
+	noteEditor.Width = 80
 
 	// Initialize list
 	items := []list.Item{}
@@ -482,6 +509,7 @@ func newModel(session *TUISession, opts *TUIOptions) model {
 		searchInput:        ti,
 		list:               l,
 		help:               h,
+		noteEditor:         noteEditor,
 		mode:               ModeSearch,
 		fuzzyEnabled:       opts.FuzzyEnabled,
 		syntaxEnabled:      true,
@@ -562,6 +590,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.deleteTargetID = 0
 				m.deleteTargetCmd = ""
 				return m, nil
+			case ModeNoteEdit:
+				// Cancel note editing and go back to details
+				m.mode = ModeDetails
+				m.noteEditingRecordID = 0
+				m.noteEditingRecord = nil
+				m.noteEditOriginal = ""
+				m.noteEditError = nil
+				return m, nil
 			default:
 				// In search mode, ESC quits the application
 				return m, tea.Quit
@@ -579,6 +615,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleDeleteConfirmKeys(msg)
 		case ModeWipeConfirm:
 			return m.handleWipeConfirmKeys(msg)
+		case ModeNoteEdit:
+			return m.handleNoteEditKeys(msg)
 		default:
 			return m.handleSearchKeys(msg)
 		}
@@ -680,6 +718,8 @@ func (m model) View() string {
 		return m.renderDeleteConfirm()
 	case ModeWipeConfirm:
 		return m.renderWipeConfirm()
+	case ModeNoteEdit:
+		return m.renderNoteEdit()
 	default:
 		return m.renderSearch()
 	}
@@ -977,6 +1017,14 @@ func (m model) handleSearchKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+	case key.Matches(msg, m.keys.NoteEdit):
+		// Edit note for the currently selected record
+		if len(m.list.Items()) > 0 {
+			if item, ok := m.list.SelectedItem().(CommandItem); ok {
+				return m.enterNoteEditMode(item.record)
+			}
+		}
+
 	case key.Matches(msg, m.keys.Wipe):
 		// Wipe all command history
 		return m.handleWipeCommand()
@@ -1017,7 +1065,8 @@ func (m model) handleSearchKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		key.Matches(msg, m.keys.Failure),
 		key.Matches(msg, m.keys.Clear),
 		key.Matches(msg, m.keys.Refresh),
-		key.Matches(msg, m.keys.Stats):
+		key.Matches(msg, m.keys.Stats),
+		key.Matches(msg, m.keys.NoteEdit):
 		// Don't pass these keys to list
 	default:
 		// Pass unhandled keys to list
@@ -1100,8 +1149,202 @@ func (m model) handleDetailsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				)
 			}
 		}
+	case key.Matches(msg, m.keys.NoteEdit):
+		// Start note editing mode
+		if len(m.list.Items()) > 0 {
+			if item, ok := m.list.SelectedItem().(CommandItem); ok {
+				return m.enterNoteEditMode(item.record)
+			}
+		}
 	}
 	return m, nil
+}
+
+// enterNoteEditMode initializes note editing mode for a specific command
+func (m model) enterNoteEditMode(record *storage.CommandRecord) (tea.Model, tea.Cmd) {
+	m.mode = ModeNoteEdit
+	m.noteEditingRecordID = record.ID
+	m.noteEditingRecord = record
+	m.noteEditOriginal = record.Note
+	m.noteEditError = nil
+	m.noteEditSuccess = false
+
+	// Set up the note editor with current note content
+	m.noteEditor.SetValue(record.Note)
+	m.noteEditor.Focus()
+
+	return m, nil
+}
+
+// handleNoteEditKeys handles key input in note editing mode
+func (m model) handleNoteEditKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+
+	switch msg.String() {
+	case "enter", "ctrl+s":
+		// Save the note
+		return m.saveNote()
+	case "esc":
+		// Cancel note editing (handled in main Update method)
+		return m, nil
+	default:
+		// Handle regular text input
+		m.noteEditor, cmd = m.noteEditor.Update(msg)
+		return m, cmd
+	}
+}
+
+// saveNote saves the current note content to storage
+func (m model) saveNote() (tea.Model, tea.Cmd) {
+	if m.noteEditingRecord == nil {
+		m.noteEditError = fmt.Errorf("no record selected for note editing")
+		return m, nil
+	}
+
+	newNote := strings.TrimSpace(m.noteEditor.Value())
+
+	// Validate note length
+	if len(newNote) > 1000 {
+		m.noteEditError = fmt.Errorf("note exceeds maximum length of 1000 characters")
+		return m, nil
+	}
+
+	var err error
+
+	if newNote == "" {
+		// Delete the note if empty
+		err = m.session.storage.DeleteNote(m.noteEditingRecordID)
+	} else if m.noteEditOriginal == "" {
+		// Add new note
+		err = m.session.storage.AddNote(m.noteEditingRecordID, newNote)
+	} else {
+		// Update existing note
+		err = m.session.storage.UpdateNote(m.noteEditingRecordID, newNote)
+	}
+
+	if err != nil {
+		m.noteEditError = err
+		return m, nil
+	}
+
+	// Update the record in memory
+	m.noteEditingRecord.Note = newNote
+
+	// Update the record in the session working set
+	for i, record := range m.sessionWorkingSet {
+		if record.ID == m.noteEditingRecordID {
+			m.sessionWorkingSet[i].Note = newNote
+			break
+		}
+	}
+
+	// Update the list item
+	for i, item := range m.list.Items() {
+		if cmdItem, ok := item.(CommandItem); ok && cmdItem.record.ID == m.noteEditingRecordID {
+			cmdItem.record.Note = newNote
+			// Update the list - we need to rebuild the items list
+			items := m.list.Items()
+			items[i] = cmdItem
+			m.list.SetItems(items)
+			break
+		}
+	}
+
+	m.noteEditSuccess = true
+	m.noteEditError = nil
+
+	// Return to details mode
+	m.mode = ModeDetails
+	return m, nil
+}
+
+// renderNoteEdit renders the note editing screen
+func (m model) renderNoteEdit() string {
+	if m.noteEditingRecord == nil {
+		return "No command selected for note editing"
+	}
+
+	var content strings.Builder
+
+	// Title
+	title := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("11")).
+		MarginLeft(2).
+		Render("Edit Note")
+	content.WriteString(title + "\n\n")
+
+	// Command context
+	commandTitle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("12")).
+		MarginLeft(2).
+		Render("Command:")
+	content.WriteString(commandTitle + "\n")
+
+	commandText := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("15")).
+		MarginLeft(4).
+		Render(m.noteEditingRecord.Command)
+	content.WriteString(commandText + "\n\n")
+
+	// Note editor
+	noteTitle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("11")).
+		MarginLeft(2).
+		Render("Note:")
+	content.WriteString(noteTitle + "\n")
+
+	// Note input field
+	noteInput := lipgloss.NewStyle().
+		MarginLeft(4).
+		Render(m.noteEditor.View())
+	content.WriteString(noteInput + "\n\n")
+
+	// Character count
+	charCount := len(m.noteEditor.Value())
+	charCountColor := lipgloss.Color("8")
+	if charCount > 900 {
+		charCountColor = lipgloss.Color("11") // Yellow warning
+	}
+	if charCount > 1000 {
+		charCountColor = lipgloss.Color("9") // Red error
+	}
+
+	charCountText := lipgloss.NewStyle().
+		Foreground(charCountColor).
+		MarginLeft(4).
+		Render(fmt.Sprintf("Characters: %d/1000", charCount))
+	content.WriteString(charCountText + "\n")
+
+	// Error message
+	if m.noteEditError != nil {
+		errorText := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("9")).
+			MarginLeft(4).
+			Render(fmt.Sprintf("Error: %v", m.noteEditError))
+		content.WriteString("\n" + errorText + "\n")
+	}
+
+	// Success message
+	if m.noteEditSuccess {
+		successText := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("10")).
+			MarginLeft(4).
+			Render("Note saved successfully!")
+		content.WriteString("\n" + successText + "\n")
+	}
+
+	// Footer
+	content.WriteString("\n")
+	footer := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("8")).
+		MarginLeft(2).
+		Render("Enter/Ctrl+S: save • Esc: cancel")
+	content.WriteString(footer)
+
+	return content.String()
 }
 
 // renderHelp renders the help screen
@@ -1124,6 +1367,9 @@ func (m model) renderHelp() string {
   enter      Copy command (inject into shell)
   ctrl+j     Execute command directly
   tab        View detailed command information
+
+Notes:
+  ctrl+n     Edit note for selected command
 
 Search:
   Type anything to search (all letters/numbers work!)
@@ -1287,12 +1533,29 @@ func (m model) renderDetails() string {
 		}
 	}
 
+	// Notes section
+	if record.Note != "" {
+		content.WriteString("\n")
+		noteTitle := lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("11")).
+			MarginLeft(2).
+			Render("Note:")
+		content.WriteString(noteTitle + "\n")
+
+		noteText := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("15")).
+			MarginLeft(4).
+			Render(record.Note)
+		content.WriteString(noteText + "\n")
+	}
+
 	// Footer
 	content.WriteString("\n")
 	footer := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("8")).
 		MarginLeft(2).
-		Render("Enter: select • Tab/Esc: return to search")
+		Render("Enter: select • Tab/Esc: return to search • Ctrl+N: edit note")
 	content.WriteString(footer)
 
 	return content.String()
