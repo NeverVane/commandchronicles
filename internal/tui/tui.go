@@ -1024,9 +1024,6 @@ func (m model) renderSearchInput() string {
 	if !m.syntaxEnabled {
 		indicators = append(indicators, lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render("NO-SYNTAX"))
 	}
-	if m.combinedSearchMode {
-		indicators = append(indicators, lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render("N+C"))
-	}
 
 	searchContent := m.searchInput.View()
 	if len(indicators) > 0 {
@@ -1069,15 +1066,31 @@ func (m model) renderStatus() string {
 		}
 	}
 
-	// Search mode indicators
+	// Search mode indicators with prominent styling
+	var modeIndicator string
 	if m.combinedSearchMode && m.tagSearchMode {
-		parts = append(parts, "Mode: Commands+Notes+Tags")
+		modeIndicator = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("13")).
+			Bold(true).
+			Render("Mode: Commands+Notes+Tags")
 	} else if m.combinedSearchMode {
-		parts = append(parts, "Mode: Commands+Notes")
+		modeIndicator = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("11")).
+			Bold(true).
+			Render("Mode: Commands+Notes")
 	} else if m.tagSearchMode && m.combinedTagSearch {
-		parts = append(parts, "Mode: Commands+Tags")
+		modeIndicator = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("6")).
+			Bold(true).
+			Render("Mode: Commands+Tags")
 	} else if m.tagSearchMode {
-		parts = append(parts, "Mode: Tags")
+		modeIndicator = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("5")).
+			Bold(true).
+			Render("Mode: Tags")
+	}
+	if modeIndicator != "" {
+		parts = append(parts, modeIndicator)
 	}
 
 	// Selected item position
@@ -3254,21 +3267,34 @@ func (m model) performSearch() tea.Cmd {
 				return searchResultMsg{err: fmt.Errorf("command search failed: %w", err), timeFilter: timeFilter}
 			}
 
-			// Then, search notes specifically
-			noteSearchResult, err := m.session.storage.SearchNotes(effectiveQuery, &securestorage.QueryOptions{
-				Limit:  searchLimit,
-				Offset: 0,
-			})
+			// Then, search notes using fuzzy search and filter for note matches
+			noteSearchReq := &search.SearchRequest{
+				Query:          effectiveQuery,
+				Limit:          searchLimit,
+				UseFuzzySearch: true, // Always use fuzzy for note search
+				UseCache:       true,
+				MaxBatches:     20,
+				Since:          timeFilter.Since,
+				Until:          timeFilter.Until,
+			}
+
+			noteSearchResponse, err := m.session.searchService.Search(noteSearchReq)
 			if err != nil {
 				m.session.logger.Warn().
 					Err(err).
 					Str("query", effectiveQuery).
-					Msg("Note search failed, continuing with command results only")
+					Msg("Fuzzy note search failed, continuing with command results only")
 			} else {
-				noteMatches = noteSearchResult.Records
+				// Filter results to only include commands where notes contain the query
+				queryLower := strings.ToLower(effectiveQuery)
+				for _, record := range noteSearchResponse.Records {
+					if record.HasNote() && strings.Contains(strings.ToLower(record.Note), queryLower) {
+						noteMatches = append(noteMatches, record)
+					}
+				}
 				m.session.logger.Debug().
 					Int("note_matches", len(noteMatches)).
-					Msg("Found note matches")
+					Msg("Found fuzzy note matches")
 			}
 
 			// Merge results, avoiding duplicates
@@ -3295,7 +3321,7 @@ func (m model) performSearch() tea.Cmd {
 					Str("query", effectiveQuery).
 					Msg("Performing combined commands+tags search")
 
-				// First, search commands normally
+				// First, search commands normally (this already includes tags in fuzzy search)
 				response, err = m.session.searchService.Search(req)
 				if err != nil {
 					m.session.logger.Error().
@@ -3305,59 +3331,55 @@ func (m model) performSearch() tea.Cmd {
 					return searchResultMsg{err: fmt.Errorf("combined tag search failed: %w", err), timeFilter: timeFilter}
 				}
 
-				// Then, search for commands by tag and merge
-				tagMatches, err := m.session.storage.SearchCommandsByTag(effectiveQuery)
-				if err != nil {
-					m.session.logger.Warn().
-						Err(err).
-						Str("query", effectiveQuery).
-						Msg("Tag search portion failed, continuing with command results only")
-				} else {
-					// Merge results, avoiding duplicates
-					commandIDs := make(map[int64]bool)
-					for _, record := range response.Records {
-						commandIDs[record.ID] = true
-					}
-
-					// Add tag matches that aren't already in command results
-					for _, tagRecord := range tagMatches {
-						if !commandIDs[tagRecord.ID] {
-							response.Records = append(response.Records, tagRecord)
-						}
-					}
-
-					m.session.logger.Debug().
-						Int("total_combined_results", len(response.Records)).
-						Int("command_matches", len(response.Records)-len(tagMatches)).
-						Int("tag_matches", len(tagMatches)).
-						Msg("Combined commands+tags search completed")
-				}
+				m.session.logger.Debug().
+					Int("combined_results", len(response.Records)).
+					Msg("Combined commands+tags search completed (fuzzy search includes tags)")
 			} else {
 				m.session.logger.Debug().
 					Str("query", effectiveQuery).
-					Msg("Performing tag search")
+					Msg("Performing fuzzy tag search")
 
-				// Search for commands that have tags matching the query
-				tagMatches, err := m.session.storage.SearchCommandsByTag(effectiveQuery)
+				// Use fuzzy search but filter results to only show commands that have matching tags
+				tagSearchReq := &search.SearchRequest{
+					Query:          effectiveQuery,
+					Limit:          searchLimit,
+					UseFuzzySearch: true, // Always use fuzzy for tag search
+					UseCache:       true,
+					MaxBatches:     20,
+					Since:          timeFilter.Since,
+					Until:          timeFilter.Until,
+				}
+
+				response, err = m.session.searchService.Search(tagSearchReq)
 				if err != nil {
 					m.session.logger.Error().
 						Err(err).
 						Str("query", effectiveQuery).
-						Msg("Tag search failed")
-					return searchResultMsg{err: fmt.Errorf("tag search failed: %w", err), timeFilter: timeFilter}
+						Msg("Fuzzy tag search failed")
+					return searchResultMsg{err: fmt.Errorf("fuzzy tag search failed: %w", err), timeFilter: timeFilter}
 				}
+
+				// Filter results to only include commands where tags contain the query
+				var tagFilteredResults []*storage.CommandRecord
+				queryLower := strings.ToLower(effectiveQuery)
+				for _, record := range response.Records {
+					if record.HasTags() {
+						for _, tag := range record.Tags {
+							if strings.Contains(strings.ToLower(tag), queryLower) {
+								tagFilteredResults = append(tagFilteredResults, record)
+								break // Found a matching tag, include this record
+							}
+						}
+					}
+				}
+
+				response.Records = tagFilteredResults
+				response.TotalMatches = len(tagFilteredResults)
 
 				m.session.logger.Debug().
-					Int("tag_matches", len(tagMatches)).
-					Msg("Tag search completed")
-
-				// Create response with tag matches
-				response = &search.SearchResponse{
-					Records:      tagMatches,
-					TotalMatches: len(tagMatches),
-					FromCache:    0,
-					FromBatches:  len(tagMatches),
-				}
+					Int("fuzzy_results", len(response.Records)).
+					Int("tag_filtered", len(tagFilteredResults)).
+					Msg("Fuzzy tag search completed")
 			}
 		} else {
 			// Regular search
