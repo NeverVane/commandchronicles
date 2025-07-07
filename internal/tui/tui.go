@@ -924,7 +924,7 @@ func (m model) renderSearch() string {
 
 	// Create exactly two lines of help text with proper styling
 	line1 := "↑/↓: navigate • enter: copy • ctrl+j: execute • tab: details • ctrl+f: fuzzy • ctrl+n: notes"
-	line2 := "ctrl+f+n: combined search • ctrl+s/x: filters • ctrl+g: tags • ctrl+t: stats • ?: help • ctrl+c/esc: quit"
+	line2 := "ctrl+f+n: combined search • ctrl+f+g: tag search • ctrl+s/x: filters • ctrl+g: tags • ctrl+t: stats • ?: help • ctrl+c/esc: quit"
 	helpView := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("8")).
 		MarginLeft(2).
