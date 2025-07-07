@@ -1731,79 +1731,112 @@ func (m model) renderHelp() string {
 		Render("CommandChronicles - Keyboard Shortcuts")
 	content.WriteString(title + "\n\n")
 
-	// Custom help content with correct navigation instructions
-	helpText := lipgloss.NewStyle().
-		MarginLeft(2).
+	// Create three columns for better organization
+	leftColumn := lipgloss.NewStyle().
+		Width(35).
 		Render(`Navigation:
-  ↑/↓        Navigate through command list
-  mouse      Scroll wheel to navigate
-  enter      Copy command (inject into shell)
-  ctrl+j     Execute command directly
-  tab        View detailed command information
+  ↑/↓        Navigate list
+  mouse      Scroll wheel
+  enter      Copy command
+  ctrl+j     Execute directly
+  tab        View details
 
 Notes:
-  ctrl+n     Edit note for selected command
-  ctrl+f+n   Toggle combined notes+commands search
+  ctrl+n     Edit note
+  ctrl+f+n   Combined search
 
   In Note Editor:
   enter      New line
   ctrl+s     Save note
-  esc        Cancel editing
+  esc        Cancel
 
 Tags:
-  ctrl+g     Manage tags for selected command
-  ctrl+f+g   Toggle combined tags+commands search
+  ctrl+g     Manage tags
+  ctrl+f+g   Combined search
 
   In Tag Editor:
   enter      New line
   ctrl+s     Save tags
-  ctrl+t     Color picker for tags
-  esc        Cancel editing
+  ctrl+t     Color picker
+  esc        Cancel
 
   In Color Picker:
   ↑/↓        Navigate colors
   enter      Select color
-  esc        Cancel
+  esc        Cancel`)
 
-Search:
-  Type anything to search (all letters/numbers work!)
-  ctrl+f     Toggle fuzzy search mode (or start sequences)
-  ctrl+s     Toggle success-only filter
-  ctrl+x     Toggle failure-only filter
-  ctrl+k     Clear search input
-  ctrl+l     Refresh search results
-  ctrl+t     Show statistics view
-  ctrl+a     Auto-tagging rules management
+	middleColumn := lipgloss.NewStyle().
+		Width(35).
+		Render(`Search:
+  [type]     Search anything
+  ctrl+f     Toggle fuzzy
+  ctrl+s     Success only
+  ctrl+x     Failures only
+  ctrl+k     Clear search
+  ctrl+l     Refresh results
+  ctrl+t     Statistics
+  ctrl+a     Auto-tag rules
 
-Combined Search:
-  When N+C mode is active, searches both command text
-  and note content simultaneously. Results show where matches were found.
-
-Tag Search:
-  When Tag mode is active, searches fuzzy in tag names.
-  Partial matches work (e.g., 'control' finds 'version-control').
-  Ctrl+F+G cycles: Tags → Commands+Tags → Off.
+Search Modes:
+  Commands   Default mode
+  N+C        Commands+Notes
+  Tags       Tags only
+  C+T        Commands+Tags
 
 Time Search:
-  1h         Commands from last hour
-  2d         Commands from last 2 days
-  since 1h   Commands since 1 hour ago
-  last 3d    Commands from last 3 days
-  today      Commands from today
-  yesterday  Commands from yesterday
-  this week  Commands from this week
-  1h-30m     Commands between 1 hour and 30 minutes ago
+  1h         Last hour
+  2d         Last 2 days
+  since 1h   Since 1h ago
+  last 3d    Last 3 days
+  today      Today
+  yesterday  Yesterday
+  this week  This week
+  1h-30m     Between times`)
 
-Deletion:
-  del/ctrl+d Delete selected command
-  ctrl+w     Wipe all command history
+	rightColumn := lipgloss.NewStyle().
+		Width(35).
+		Render(`Deletion:
+  del/ctrl+d Delete record
+  ctrl+w     Wipe all history
 
 General:
-  ?          Show/hide this help
+  ?          Show/hide help
   ctrl+c     Quit application
-  esc        Go back / Quit from main view`)
+  esc        Go back/Quit
 
-	content.WriteString(helpText)
+Search Tips:
+  • Fuzzy search finds
+    partial matches
+  • Tag search supports
+    'control' → 'version-control'
+  • Combined modes search
+    multiple fields
+  • Time expressions work
+    naturally
+  • Use Ctrl+F sequences
+    for mode switching
+
+Key Sequences:
+  ctrl+f     Start sequence
+  ctrl+f+n   Notes mode
+  ctrl+f+g   Tag mode
+
+Auto-tagging:
+  • Rules auto-apply tags
+  • Ctrl+A to manage
+  • Retroactive application`)
+
+	// Join columns horizontally with spacing
+	columnsContent := lipgloss.JoinHorizontal(
+		lipgloss.Top,
+		leftColumn,
+		"   ", // Spacing
+		middleColumn,
+		"   ", // Spacing
+		rightColumn,
+	)
+
+	content.WriteString(lipgloss.NewStyle().MarginLeft(2).Render(columnsContent))
 
 	footer := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("8")).
