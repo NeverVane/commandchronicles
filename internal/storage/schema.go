@@ -12,10 +12,11 @@ type CommandRecord struct {
 	ID int64 `json:"id"` // Database record ID for deletion operations
 
 	// Core command information
-	Command  string `json:"command"`        // The actual command text
-	ExitCode int    `json:"exit_code"`      // Command exit code
-	Duration int64  `json:"duration_ms"`    // Execution duration in milliseconds
-	Note     string `json:"note,omitempty"` // Optional user note about the command
+	Command  string   `json:"command"`        // The actual command text
+	ExitCode int      `json:"exit_code"`      // Command exit code
+	Duration int64    `json:"duration_ms"`    // Execution duration in milliseconds
+	Note     string   `json:"note,omitempty"` // Optional user note about the command
+	Tags     []string `json:"tags,omitempty"` // Optional tags for command categorization
 
 	// Context information
 	WorkingDir string `json:"working_dir"`  // Directory where command was executed
@@ -169,11 +170,22 @@ func NewCommandRecord(command string, exitCode int, duration int64, workingDir, 
 
 // IsValid validates that the command record has required fields
 func (cr *CommandRecord) IsValid() bool {
-	return cr.Command != "" &&
-		cr.SessionID != "" &&
-		cr.Hostname != "" &&
-		cr.Timestamp > 0 &&
-		cr.CreatedAt > 0
+	if cr.Command == "" || cr.SessionID == "" || cr.Hostname == "" || cr.Timestamp <= 0 || cr.CreatedAt <= 0 {
+		return false
+	}
+
+	// Validate tags
+	if len(cr.Tags) > MaxTagsPerCommand {
+		return false
+	}
+
+	for _, tag := range cr.Tags {
+		if len(strings.TrimSpace(tag)) > MaxTagLength {
+			return false
+		}
+	}
+
+	return true
 }
 
 // NeedsSync returns true if the record needs to be synced
@@ -237,6 +249,88 @@ func (cr *CommandRecord) GetNotePreview(maxLength int) string {
 	return preview + "..."
 }
 
+// HasTags returns true if the command has tags
+func (cr *CommandRecord) HasTags() bool {
+	return len(cr.Tags) > 0
+}
+
+// AddTag adds a tag to the command if it doesn't already exist
+func (cr *CommandRecord) AddTag(tag string) error {
+	trimmed := strings.TrimSpace(tag)
+	if trimmed == "" {
+		return fmt.Errorf("tag cannot be empty")
+	}
+
+	if len(trimmed) > MaxTagLength {
+		return fmt.Errorf("tag exceeds maximum length of %d characters", MaxTagLength)
+	}
+
+	if len(cr.Tags) >= MaxTagsPerCommand {
+		return fmt.Errorf("command cannot have more than %d tags", MaxTagsPerCommand)
+	}
+
+	// Check if tag already exists
+	for _, existingTag := range cr.Tags {
+		if existingTag == trimmed {
+			return nil // Tag already exists, no error
+		}
+	}
+
+	cr.Tags = append(cr.Tags, trimmed)
+	return nil
+}
+
+// RemoveTag removes a tag from the command
+func (cr *CommandRecord) RemoveTag(tag string) bool {
+	trimmed := strings.TrimSpace(tag)
+	for i, existingTag := range cr.Tags {
+		if existingTag == trimmed {
+			cr.Tags = append(cr.Tags[:i], cr.Tags[i+1:]...)
+			return true
+		}
+	}
+	return false
+}
+
+// HasTag checks if the command has a specific tag
+func (cr *CommandRecord) HasTag(tag string) bool {
+	trimmed := strings.TrimSpace(tag)
+	for _, existingTag := range cr.Tags {
+		if existingTag == trimmed {
+			return true
+		}
+	}
+	return false
+}
+
+// GetTagsString returns tags as a comma-separated string
+func (cr *CommandRecord) GetTagsString() string {
+	if len(cr.Tags) == 0 {
+		return ""
+	}
+	return strings.Join(cr.Tags, ", ")
+}
+
+// SetTags sets the tags for the command with validation
+func (cr *CommandRecord) SetTags(tags []string) error {
+	if len(tags) > MaxTagsPerCommand {
+		return fmt.Errorf("command cannot have more than %d tags", MaxTagsPerCommand)
+	}
+
+	var validTags []string
+	for _, tag := range tags {
+		trimmed := strings.TrimSpace(tag)
+		if trimmed != "" {
+			if len(trimmed) > MaxTagLength {
+				return fmt.Errorf("tag '%s' exceeds maximum length of %d characters", trimmed, MaxTagLength)
+			}
+			validTags = append(validTags, trimmed)
+		}
+	}
+	cr.Tags = validTags
+	return nil
+}
+
 // GetSearchableFields returns fields that can be searched without decryption
 func (ehr *EncryptedHistoryRecord) GetSearchableFields() map[string]interface{} {
 	return map[string]interface{}{
@@ -256,6 +350,8 @@ const (
 	MaxEnvironmentVars  = 100   // Maximum number of environment variables to store
 	MaxEnvironmentSize  = 8192  // Maximum total size of environment data
 	MaxNoteLength       = 1000  // Maximum note text length
+	MaxTagLength        = 50    // Maximum tag name length
+	MaxTagsPerCommand   = 10    // Maximum number of tags per command
 
 	// Schema version constants
 	CurrentSchemaVersion = 2
@@ -276,5 +372,7 @@ var DatabaseConstraints = map[string]interface{}{
 	"max_hostname_length":    MaxHostnameLength,
 	"max_session_id_length":  MaxSessionIDLength,
 	"max_note_length":        MaxNoteLength,
+	"max_tag_length":         MaxTagLength,
+	"max_tags_per_command":   MaxTagsPerCommand,
 	"current_schema_version": CurrentSchemaVersion,
 }

@@ -48,6 +48,9 @@ type Config struct {
 	// Deletion configuration
 	Deletion DeletionConfig `toml:"deletion"`
 
+	// Tags configuration
+	Tags TagsConfig `toml:"tags"`
+
 	// Directory paths (computed, not stored in TOML)
 	DataDir   string `toml:"-"`
 	ConfigDir string `toml:"-"`
@@ -307,6 +310,30 @@ type DeletionConfig struct {
 	AutoExportBeforeWipe bool `toml:"auto_export_before_wipe"`
 }
 
+// TagsConfig contains tag-related settings
+type TagsConfig struct {
+	// Enable tag functionality
+	Enabled bool `toml:"enabled"`
+
+	// Show tags in TUI command display
+	ShowInTUI bool `toml:"show_in_tui"`
+
+	// Maximum number of tags to display in compact view
+	MaxDisplayTags int `toml:"max_display_tags"`
+
+	// Enable auto-tagging based on command patterns
+	AutoTagging bool `toml:"auto_tagging"`
+
+	// Auto-tagging rules (command prefix -> tag name)
+	AutoTagRules map[string]string `toml:"auto_tag_rules"`
+
+	// Visual indicators for tagged commands
+	ShowIndicators bool `toml:"show_indicators"`
+
+	// Separator for tag display (default: ", ")
+	DisplaySeparator string `toml:"display_separator"`
+}
+
 // DefaultConfig returns a configuration with sensible defaults
 func DefaultConfig() *Config {
 	homeDir, _ := os.UserHomeDir()
@@ -423,6 +450,32 @@ func DefaultConfig() *Config {
 			ResetSyncOnWipe:      true,  // Default to resetting sync after wipe
 			RequireConfirmation:  true,  // Always require confirmation
 			AutoExportBeforeWipe: false, // Don't auto-export by default
+		},
+		Tags: TagsConfig{
+			Enabled:        true,
+			ShowInTUI:      true,
+			MaxDisplayTags: 3,
+			AutoTagging:    true,
+			AutoTagRules: map[string]string{
+				"docker":    "docker",
+				"git":       "git",
+				"kubectl":   "k8s",
+				"npm":       "nodejs",
+				"yarn":      "nodejs",
+				"pip":       "python",
+				"python":    "python",
+				"go":        "golang",
+				"cargo":     "rust",
+				"make":      "build",
+				"cmake":     "build",
+				"ssh":       "network",
+				"curl":      "network",
+				"wget":      "network",
+				"systemctl": "system",
+				"sudo":      "system",
+			},
+			ShowIndicators:   true,
+			DisplaySeparator: ", ",
 		},
 		DataDir:   dataDir,
 		ConfigDir: configDir,

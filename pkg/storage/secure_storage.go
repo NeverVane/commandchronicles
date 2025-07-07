@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1239,6 +1240,88 @@ func (ss *SecureStorage) SearchNotes(query string, opts *QueryOptions) (*Retriev
 // GetNotesContaining returns all records with notes containing the specified text
 func (ss *SecureStorage) GetNotesContaining(searchText string, opts *QueryOptions) (*RetrieveResult, error) {
 	return ss.SearchNotes(searchText, opts)
+}
+
+// GetCommandByID retrieves a specific command by its ID
+func (ss *SecureStorage) GetCommandByID(commandID string) (*storage.CommandRecord, error) {
+	if err := ss.checkAccess(); err != nil {
+		return nil, err
+	}
+
+	if commandID == "" {
+		return nil, fmt.Errorf("command ID cannot be empty")
+	}
+
+	// Convert string ID to int64
+	recordID, err := strconv.ParseInt(commandID, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid command ID: %s", commandID)
+	}
+
+	return ss.getRecordByID(recordID)
+}
+
+// UpdateCommand updates an existing command record
+func (ss *SecureStorage) UpdateCommand(record *storage.CommandRecord) error {
+	if err := ss.checkAccess(); err != nil {
+		return err
+	}
+
+	if record == nil {
+		return fmt.Errorf("record cannot be nil")
+	}
+
+	return ss.updateRecord(record)
+}
+
+// SearchCommandsWithTags retrieves all commands that have tags
+func (ss *SecureStorage) SearchCommandsWithTags() ([]*storage.CommandRecord, error) {
+	if err := ss.checkAccess(); err != nil {
+		return nil, err
+	}
+
+	// Get all records and filter for those with tags
+	opts := &QueryOptions{Limit: 10000} // Large limit to get all records
+	allRecords, err := ss.Retrieve(opts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve records: %w", err)
+	}
+
+	var taggedRecords []*storage.CommandRecord
+	for _, record := range allRecords.Records {
+		if record.HasTags() {
+			taggedRecords = append(taggedRecords, record)
+		}
+	}
+
+	return taggedRecords, nil
+}
+
+// SearchCommandsByTag retrieves all commands that have a specific tag
+func (ss *SecureStorage) SearchCommandsByTag(tag string) ([]*storage.CommandRecord, error) {
+	if err := ss.checkAccess(); err != nil {
+		return nil, err
+	}
+
+	if strings.TrimSpace(tag) == "" {
+		return nil, fmt.Errorf("tag cannot be empty")
+	}
+
+	// Get all records and filter for those with the specific tag
+	opts := &QueryOptions{Limit: 10000} // Large limit to get all records
+	allRecords, err := ss.Retrieve(opts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve records: %w", err)
+	}
+
+	var matchingRecords []*storage.CommandRecord
+	for _, record := range allRecords.Records {
+		if record.HasTag(tag) {
+			matchingRecords = append(matchingRecords, record)
+		}
+	}
+
+	return matchingRecords, nil
 }
 
 // GetAllNotedCommands returns all commands that have notes

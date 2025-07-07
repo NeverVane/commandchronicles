@@ -49,6 +49,11 @@ type SearchRequest struct {
 	Since      *time.Time `json:"since"`
 	Until      *time.Time `json:"until"`
 
+	// Tag filtering
+	Tags        []string `json:"tags,omitempty"`         // Filter by tag names
+	ExcludeTags []string `json:"exclude_tags,omitempty"` // Exclude commands with these tags
+	TagMode     string   `json:"tag_mode"`               // "any" or "all"
+
 	// Search options
 	CaseSensitive  bool `json:"case_sensitive"`
 	ExactMatch     bool `json:"exact_match"`
@@ -407,6 +412,38 @@ func (s *SearchService) recordMatchesFilters(record *storage.CommandRecord, req 
 		return false
 	}
 
+	// Tag filtering
+	if len(req.ExcludeTags) > 0 {
+		for _, excludeTag := range req.ExcludeTags {
+			if record.HasTag(excludeTag) {
+				return false
+			}
+		}
+	}
+
+	if len(req.Tags) > 0 {
+		if req.TagMode == "all" {
+			// All specified tags must be present
+			for _, tag := range req.Tags {
+				if !record.HasTag(tag) {
+					return false
+				}
+			}
+		} else {
+			// Any of the specified tags must be present (default mode)
+			hasAnyTag := false
+			for _, tag := range req.Tags {
+				if record.HasTag(tag) {
+					hasAnyTag = true
+					break
+				}
+			}
+			if !hasAnyTag {
+				return false
+			}
+		}
+	}
+
 	return true
 }
 
@@ -502,6 +539,15 @@ func (s *SearchService) buildAppliedFilters(req *SearchRequest) map[string]inter
 	}
 	if req.ExactMatch {
 		filters["exact_match"] = true
+	}
+	if len(req.Tags) > 0 {
+		filters["tags"] = req.Tags
+	}
+	if len(req.ExcludeTags) > 0 {
+		filters["exclude_tags"] = req.ExcludeTags
+	}
+	if req.TagMode != "" && req.TagMode != "any" {
+		filters["tag_mode"] = req.TagMode
 	}
 
 	return filters

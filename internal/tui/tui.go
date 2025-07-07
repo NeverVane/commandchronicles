@@ -49,6 +49,7 @@ const (
 	ModeDeleteConfirm
 	ModeWipeConfirm
 	ModeNoteEdit
+	ModeTagEdit
 )
 
 // TUISession represents an active TUI session with all required services
@@ -66,6 +67,7 @@ type TUISession struct {
 // CommandItem represents a command record for the list component
 type CommandItem struct {
 	record *storage.CommandRecord
+	config *config.Config
 }
 
 func (i CommandItem) FilterValue() string {
@@ -77,11 +79,16 @@ func (i CommandItem) Title() string {
 	defer func() {
 		if r := recover(); r != nil {
 			if sentry.IsEnabled() {
-				sentry.CaptureError(fmt.Errorf("panic in CommandItem.Title: %v", r), "tui", "title_render", map[string]string{
-					"command":     i.record.Command,
+				recordInfo := map[string]string{
+					"command":     "nil_record",
 					"working_dir": "[REDACTED]",
-					"exit_code":   fmt.Sprintf("%d", i.record.ExitCode),
-				})
+					"exit_code":   "unknown",
+				}
+				if i.record != nil {
+					recordInfo["command"] = i.record.Command
+					recordInfo["exit_code"] = fmt.Sprintf("%d", i.record.ExitCode)
+				}
+				sentry.CaptureError(fmt.Errorf("panic in CommandItem.Title: %v", r), "tui", "title_render", recordInfo)
 				sentry.Flush(2 * time.Second)
 			}
 
@@ -89,6 +96,11 @@ func (i CommandItem) Title() string {
 			panic(r)
 		}
 	}()
+
+	// Defensive check for nil record
+	if i.record == nil {
+		return "Error: No command data"
+	}
 
 	cursor := "  "
 	status := "✓"
@@ -203,7 +215,38 @@ func (i CommandItem) Title() string {
 		noteIndicator = lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render("● ")
 	}
 
-	leftPart := cursor + statusStyle.Render(status) + " " + noteIndicator + commandStyle.Render(commandText)
+	// Add tag display if command has tags
+	tagDisplay := ""
+	if i.record != nil && i.record.HasTags() && len(i.record.Tags) > 0 {
+		tagStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
+		tags := i.record.Tags
+
+		// Limit number of tags shown
+		maxTags := 3
+		if len(tags) > maxTags {
+			tags = tags[:maxTags]
+		}
+
+		for idx, tag := range tags {
+			if tag == "" {
+				continue // Skip empty tags
+			}
+			if idx > 0 {
+				tagDisplay += " "
+			}
+			tagDisplay += tagStyle.Render(fmt.Sprintf("#%s", tag))
+		}
+
+		if len(i.record.Tags) > maxTags {
+			tagDisplay += tagStyle.Render("...")
+		}
+
+		if tagDisplay != "" {
+			tagDisplay = " " + tagDisplay
+		}
+	}
+
+	leftPart := cursor + statusStyle.Render(status) + " " + noteIndicator + commandStyle.Render(commandText) + tagDisplay
 	rightPart := timeStyle.Render(timeText)
 
 	// Use lipgloss to create proper spacing for right alignment
@@ -228,25 +271,26 @@ func (i CommandItem) Description() string {
 
 // keyMap defines key bindings
 type keyMap struct {
-	Up       key.Binding
-	Down     key.Binding
-	Left     key.Binding
-	Right    key.Binding
-	Help     key.Binding
-	Quit     key.Binding
-	Enter    key.Binding
-	Execute  key.Binding
-	Tab      key.Binding
-	Fuzzy    key.Binding
-	Syntax   key.Binding
-	Success  key.Binding
-	Failure  key.Binding
-	Clear    key.Binding
-	Refresh  key.Binding
-	Stats    key.Binding
-	Delete   key.Binding
-	Wipe     key.Binding
-	NoteEdit key.Binding
+	Up        key.Binding
+	Down      key.Binding
+	Left      key.Binding
+	Right     key.Binding
+	Help      key.Binding
+	Quit      key.Binding
+	Enter     key.Binding
+	Execute   key.Binding
+	Tab       key.Binding
+	Fuzzy     key.Binding
+	Syntax    key.Binding
+	Success   key.Binding
+	Failure   key.Binding
+	Clear     key.Binding
+	Refresh   key.Binding
+	Stats     key.Binding
+	Delete    key.Binding
+	Wipe      key.Binding
+	NoteEdit  key.Binding
+	TagManage key.Binding
 }
 
 func (k keyMap) ShortHelp() []key.Binding {
@@ -258,7 +302,7 @@ func (k keyMap) FullHelp() [][]key.Binding {
 		{k.Up, k.Down, k.Enter, k.Execute, k.Tab},
 		{k.Fuzzy, k.Syntax, k.Success, k.Failure},
 		{k.Clear, k.Refresh, k.Stats, k.Delete, k.Wipe},
-		{k.NoteEdit, k.Help, k.Quit},
+		{k.NoteEdit, k.TagManage, k.Help, k.Quit},
 	}
 }
 
@@ -331,6 +375,10 @@ var keys = keyMap{
 		key.WithKeys("ctrl+n"),
 		key.WithHelp("ctrl+n", "edit note"),
 	),
+	TagManage: key.NewBinding(
+		key.WithKeys("ctrl+g"),
+		key.WithHelp("ctrl+g", "manage tags"),
+	),
 }
 
 // model represents the TUI state using bubbles components
@@ -399,6 +447,13 @@ type model struct {
 	noteEditOriginal    string
 	noteEditSuccess     bool
 	noteEditError       error
+
+	// Tag editing state
+	tagEditingRecordID int64
+	tagEditingRecord   *storage.CommandRecord
+	tagEditOriginal    string
+	tagEditSuccess     bool
+	tagEditError       error
 
 	// Phase 3: Combined search state
 	combinedSearchMode bool
@@ -613,6 +668,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.noteEditOriginal = ""
 				m.noteEditError = nil
 				return m, nil
+			case ModeTagEdit:
+				// Cancel tag editing and go back to details
+				m.mode = ModeDetails
+				m.tagEditingRecordID = 0
+				m.tagEditingRecord = nil
+				m.tagEditOriginal = ""
+				m.tagEditError = nil
+				return m, nil
 			default:
 				// In search mode, ESC quits the application
 				return m, tea.Quit
@@ -632,6 +695,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleWipeConfirmKeys(msg)
 		case ModeNoteEdit:
 			return m.handleNoteEditKeys(msg)
+		case ModeTagEdit:
+			return m.handleTagEditKeys(msg)
 		default:
 			return m.handleSearchKeys(msg)
 		}
@@ -662,7 +727,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Convert records to list items
 			items := make([]list.Item, len(msg.results))
 			for i, record := range msg.results {
-				items[i] = CommandItem{record: record}
+				items[i] = CommandItem{record: record, config: m.session.config}
 			}
 
 			// Update list
@@ -743,6 +808,8 @@ func (m model) View() string {
 		return m.renderWipeConfirm()
 	case ModeNoteEdit:
 		return m.renderNoteEdit()
+	case ModeTagEdit:
+		return m.renderTagEdit()
 	default:
 		return m.renderSearch()
 	}
@@ -787,7 +854,7 @@ func (m model) renderSearch() string {
 
 	// Create exactly two lines of help text with proper styling
 	line1 := "↑/↓: navigate • enter: copy • ctrl+j: execute • tab: details • ctrl+f: fuzzy • ctrl+n: notes"
-	line2 := "ctrl+f+n: combined search • ctrl+s/x: filters • ctrl+t: stats • ?: help • ctrl+c/esc: quit"
+	line2 := "ctrl+f+n: combined search • ctrl+s/x: filters • ctrl+g: tags • ctrl+t: stats • ?: help • ctrl+c/esc: quit"
 	helpView := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("8")).
 		MarginLeft(2).
@@ -1060,6 +1127,14 @@ func (m model) handleSearchKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+	case key.Matches(msg, m.keys.TagManage):
+		// Start tag editing mode for selected command
+		if len(m.list.Items()) > 0 {
+			if item, ok := m.list.SelectedItem().(CommandItem); ok {
+				return m.enterTagEditMode(item.record)
+			}
+		}
+
 	case key.Matches(msg, m.keys.NoteEdit):
 		// Handle compound key sequence or direct note editing
 		if m.keySequenceState == "ctrl+f" && time.Now().Before(m.keySequenceTimeout) {
@@ -1124,7 +1199,8 @@ func (m model) handleSearchKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		key.Matches(msg, m.keys.Clear),
 		key.Matches(msg, m.keys.Refresh),
 		key.Matches(msg, m.keys.Stats),
-		key.Matches(msg, m.keys.NoteEdit):
+		key.Matches(msg, m.keys.NoteEdit),
+		key.Matches(msg, m.keys.TagManage):
 		// Don't pass these keys to list
 	default:
 		// Pass unhandled keys to list
@@ -1214,7 +1290,32 @@ func (m model) handleDetailsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m.enterNoteEditMode(item.record)
 			}
 		}
+	case key.Matches(msg, m.keys.TagManage):
+		// Start tag editing mode
+		if len(m.list.Items()) > 0 {
+			if item, ok := m.list.SelectedItem().(CommandItem); ok {
+				return m.enterTagEditMode(item.record)
+			}
+		}
 	}
+	return m, nil
+}
+
+// enterTagEditMode initializes tag editing mode for a specific command
+func (m model) enterTagEditMode(record *storage.CommandRecord) (tea.Model, tea.Cmd) {
+	m.mode = ModeTagEdit
+	m.tagEditingRecordID = record.ID
+	m.tagEditingRecord = record
+	m.tagEditOriginal = record.GetTagsString()
+	m.tagEditError = nil
+	m.tagEditSuccess = false
+
+	// Set up the note editor with current tags content
+	m.noteEditor.SetValue(record.GetTagsString())
+	m.noteEditor.SetWidth(m.width - 12) // Account for margins and borders
+	m.noteEditor.SetHeight(3)           // Tags are shorter than notes
+	m.noteEditor.Focus()
+
 	return m, nil
 }
 
@@ -1318,7 +1419,71 @@ func (m model) saveNote() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// renderNoteEdit renders the note editing screen
+// handleTagEditKeys handles key events in tag editing mode
+func (m model) handleTagEditKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+s"))):
+		// Save tags
+		return m.saveTag()
+
+	case key.Matches(msg, key.NewBinding(key.WithKeys("esc"))):
+		// Cancel editing
+		m.mode = ModeDetails
+		m.tagEditingRecordID = 0
+		m.tagEditingRecord = nil
+		m.tagEditOriginal = ""
+		m.tagEditError = nil
+		return m, nil
+
+	default:
+		// Handle text input
+		var cmd tea.Cmd
+		m.noteEditor, cmd = m.noteEditor.Update(msg)
+		return m, cmd
+	}
+}
+
+// saveTag saves the edited tags
+func (m model) saveTag() (tea.Model, tea.Cmd) {
+	if m.tagEditingRecord == nil {
+		m.tagEditError = fmt.Errorf("no record selected")
+		return m, nil
+	}
+
+	// Parse tags from input (comma-separated)
+	tagInput := strings.TrimSpace(m.noteEditor.Value())
+	var tags []string
+	if tagInput != "" {
+		tagParts := strings.Split(tagInput, ",")
+		for _, tag := range tagParts {
+			trimmed := strings.TrimSpace(tag)
+			if trimmed != "" {
+				tags = append(tags, trimmed)
+			}
+		}
+	}
+
+	// Set tags on record
+	if err := m.tagEditingRecord.SetTags(tags); err != nil {
+		m.tagEditError = err
+		return m, nil
+	}
+
+	// Update record in storage
+	if err := m.session.storage.UpdateCommand(m.tagEditingRecord); err != nil {
+		m.tagEditError = fmt.Errorf("failed to save tags: %w", err)
+		return m, nil
+	}
+
+	m.tagEditSuccess = true
+	m.tagEditError = nil
+
+	// Return to details mode
+	m.mode = ModeDetails
+	return m, nil
+}
+
+// renderNoteEdit renders the note editing interface
 func (m model) renderNoteEdit() string {
 	if m.noteEditingRecord == nil {
 		return "No command selected for note editing"
@@ -1448,6 +1613,7 @@ Search:
   ctrl+k     Clear search input
   ctrl+l     Refresh search results
   ctrl+t     Show statistics view
+  ctrl+g     Manage tags for selected command
 
 Combined Search:
   When N+C mode is active, searches both command text
@@ -1480,6 +1646,78 @@ General:
 		MarginLeft(2).
 		Render("Press ? or Esc to return to search")
 	content.WriteString("\n\n" + footer)
+
+	return content.String()
+}
+
+// renderTagEdit renders the tag editing interface
+func (m model) renderTagEdit() string {
+	if m.tagEditingRecord == nil {
+		return "No command selected for tag editing"
+	}
+
+	var content strings.Builder
+
+	// Title
+	title := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("12")).
+		MarginLeft(2).
+		Render("Edit Tags")
+	content.WriteString(title + "\n\n")
+
+	// Command being edited
+	commandTitle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("11")).
+		MarginLeft(2).
+		Render("Command:")
+	content.WriteString(commandTitle + "\n")
+
+	commandText := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("15")).
+		MarginLeft(4).
+		Render(m.tagEditingRecord.Command)
+	content.WriteString(commandText + "\n\n")
+
+	// Tags input
+	tagsTitle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("11")).
+		MarginLeft(2).
+		Render("Tags (comma-separated):")
+	content.WriteString(tagsTitle + "\n")
+
+	// Editor
+	editorStyle := lipgloss.NewStyle().
+		MarginLeft(2).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("6")).
+		Padding(0, 1)
+	content.WriteString(editorStyle.Render(m.noteEditor.View()) + "\n\n")
+
+	// Instructions
+	instructionsStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("8")).
+		MarginLeft(2)
+	content.WriteString(instructionsStyle.Render("ctrl+s: save • esc: cancel") + "\n\n")
+
+	// Success/error messages
+	if m.tagEditSuccess {
+		successMsg := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("10")).
+			MarginLeft(2).
+			Render("✓ Tags saved successfully!")
+		content.WriteString(successMsg + "\n")
+	}
+
+	if m.tagEditError != nil {
+		errorMsg := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("9")).
+			MarginLeft(2).
+			Render(fmt.Sprintf("✗ Error: %s", m.tagEditError.Error()))
+		content.WriteString(errorMsg + "\n")
+	}
 
 	return content.String()
 }
@@ -1519,6 +1757,20 @@ func (m model) renderDetails() string {
 		MarginLeft(4).
 		Render(record.Command)
 	content.WriteString(commandText + "\n\n")
+
+	// Command ID
+	idTitle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("11")).
+		MarginLeft(2).
+		Render("ID:")
+	content.WriteString(idTitle + "\n")
+
+	idText := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("15")).
+		MarginLeft(4).
+		Render(fmt.Sprintf("%d", record.ID))
+	content.WriteString(idText + "\n\n")
 
 	// Execution details
 	execTitle := lipgloss.NewStyle().
@@ -1604,6 +1856,29 @@ func (m model) renderDetails() string {
 			}
 			content.WriteString(lipgloss.NewStyle().MarginLeft(4).Render(fmt.Sprintf("Commit:     %s", commit)) + "\n")
 		}
+	}
+
+	// Tags
+	if record.HasTags() {
+		content.WriteString("\n")
+		tagsTitle := lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("11")).
+			MarginLeft(2).
+			Render("Tags:")
+		content.WriteString(tagsTitle + "\n")
+
+		tagStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("6")).
+			MarginLeft(4)
+
+		for i, tag := range record.Tags {
+			if i > 0 {
+				content.WriteString(" ")
+			}
+			content.WriteString(tagStyle.Render(fmt.Sprintf("#%s", tag)))
+		}
+		content.WriteString("\n")
 	}
 
 	// Notes section
@@ -1975,7 +2250,7 @@ func (m model) renderStats() string {
 	footer := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("8")).
 		MarginLeft(2).
-		Render("↑/↓: navigate • tab: switch pane • enter: copy • ctrl+t/esc: back to search")
+		Render("↑/↓: navigate • enter: copy • ctrl+j: execute • ctrl+n: edit note • ctrl+g: edit tags • esc: back")
 	sections = append(sections, footer)
 
 	return lipgloss.JoinVertical(lipgloss.Left, sections...)

@@ -38,6 +38,7 @@ type SearchableCommandRecord struct {
 	User       string    `json:"user,omitempty"`
 	Shell      string    `json:"shell,omitempty"`
 	Note       string    `json:"note,omitempty"` // User note for the command
+	Tags       []string  `json:"tags,omitempty"` // Command tags
 	ExitCode   int       `json:"exit_code"`
 	Duration   int64     `json:"duration_ms"`
 	Timestamp  time.Time `json:"timestamp"`
@@ -184,13 +185,19 @@ func (f *FuzzySearchEngine) createIndexMapping() mapping.IndexMapping {
 	shellMapping.Index = true
 	commandMapping.AddFieldMappingsAt("shell", shellMapping)
 
-	// Note field - text search with analysis (like command field)
+	// Note - full text search
 	noteMapping := bleve.NewTextFieldMapping()
 	noteMapping.Analyzer = en.AnalyzerName
 	noteMapping.Store = true
 	noteMapping.Index = true
-	noteMapping.IncludeTermVectors = true
 	commandMapping.AddFieldMappingsAt("note", noteMapping)
+
+	// Tags - keyword search for exact tag matching
+	tagsMapping := bleve.NewTextFieldMapping()
+	tagsMapping.Analyzer = "keyword"
+	tagsMapping.Store = true
+	tagsMapping.Index = true
+	commandMapping.AddFieldMappingsAt("tags", tagsMapping)
 
 	// Numeric fields
 	exitCodeMapping := bleve.NewNumericFieldMapping()
@@ -486,6 +493,33 @@ func (f *FuzzySearchEngine) extractRecordFromHit(hit *search.DocumentMatch) (*st
 		record.Note = note
 	}
 
+	// Extract tags array - handle multiple formats from Bleve
+	if tagsInterface, ok := fields["tags"]; ok {
+		var tags []string
+		switch v := tagsInterface.(type) {
+		case []interface{}:
+			// Array format
+			tags = make([]string, 0, len(v))
+			for _, tagInterface := range v {
+				if tag, ok := tagInterface.(string); ok {
+					tags = append(tags, tag)
+				}
+			}
+		case string:
+			// Single string format (Bleve sometimes flattens arrays)
+			if v != "" {
+				tags = []string{v}
+			}
+		case []string:
+			// Direct string array
+			tags = v
+		}
+
+		if len(tags) > 0 {
+			record.Tags = tags
+		}
+	}
+
 	// Extract numeric fields
 	if exitCode, ok := fields["exit_code"].(float64); ok {
 		record.ExitCode = int(exitCode)
@@ -536,6 +570,7 @@ func (f *FuzzySearchEngine) convertToSearchableRecord(record *storage.CommandRec
 		User:       record.User,
 		Shell:      record.Shell,
 		Note:       record.Note,
+		Tags:       record.Tags,
 		ExitCode:   record.ExitCode,
 		Duration:   record.Duration,
 		Timestamp:  time.UnixMilli(record.Timestamp),

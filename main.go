@@ -212,6 +212,7 @@ Get started:
 	rootCmd.AddCommand(exportCmd(cfg))
 	rootCmd.AddCommand(statsCmd(cfg))
 	rootCmd.AddCommand(noteCmd(cfg))
+	rootCmd.AddCommand(tagCmd(cfg))
 	rootCmd.AddCommand(lockCmd(cfg))
 	rootCmd.AddCommand(unlockCmd(cfg))
 	rootCmd.AddCommand(changePasswordCmd(cfg))
@@ -236,7 +237,7 @@ Get started:
 	ensureDaemonRunning(cfg)
 
 	// Perform auto-update check in background (non-blocking)
-	checkAutoUpdate(cfg)
+	// checkAutoUpdate(cfg) // Temporarily disabled to fix TUI display
 
 	// Execute the root command
 	if err := rootCmd.Execute(); err != nil {
@@ -822,6 +823,9 @@ Use without arguments to search all commands. Use --tui flag to open interactive
 			fuzziness, _ := cmd.Flags().GetInt("fuzziness")
 			exactMatch, _ := cmd.Flags().GetBool("exact")
 			verboseOutput, _ := cmd.Flags().GetBool("verbose-output")
+			tags, _ := cmd.Flags().GetStringSlice("tags")
+			excludeTags, _ := cmd.Flags().GetStringSlice("exclude-tags")
+			tagMode, _ := cmd.Flags().GetString("tag-mode")
 
 			// Initialize search service
 			searchService := search.NewSearchService(hybridCache, storage, cfg)
@@ -884,6 +888,9 @@ Use without arguments to search all commands. Use --tui flag to open interactive
 				IncludeGit:     true,
 				UseFuzzySearch: useFuzzy && query != "",
 				ExactMatch:     exactMatch,
+				Tags:           tags,
+				ExcludeTags:    excludeTags,
+				TagMode:        tagMode,
 			}
 
 			// Configure fuzzy search options if enabled
@@ -956,6 +963,17 @@ Use without arguments to search all commands. Use --tui flag to open interactive
 					// Detailed format
 					fmt.Printf("[%d] %s", i+1, record.Command)
 
+					// Add tags if present
+					if record.HasTags() {
+						fmt.Printf(" ")
+						for idx, tag := range record.Tags {
+							if idx > 0 {
+								fmt.Printf(" ")
+							}
+							fmt.Printf("#%s", tag)
+						}
+					}
+
 					fmt.Printf("\n")
 
 					fmt.Printf("    %s", record.WorkingDir)
@@ -1019,6 +1037,19 @@ Use without arguments to search all commands. Use --tui flag to open interactive
 						parts = append(parts, branch)
 					}
 
+					// Add tags if available
+					if record.HasTags() {
+						var tagsPart []string
+						for _, tag := range record.Tags {
+							tagsPart = append(tagsPart, "#"+tag)
+						}
+						tagsStr := strings.Join(tagsPart, " ")
+						if len(tagsStr) > 20 {
+							tagsStr = tagsStr[:17] + "..."
+						}
+						parts = append(parts, tagsStr)
+					}
+
 					metadata := metaStyle.Render(strings.Join(parts, " · "))
 
 					// Compact single line with consistent spacing and colors
@@ -1053,6 +1084,9 @@ Use without arguments to search all commands. Use --tui flag to open interactive
 	cmd.Flags().Bool("exact", false, "Use exact matching only")
 	cmd.Flags().Bool("tui", false, "Launch interactive TUI search interface")
 	cmd.Flags().Bool("verbose-output", false, "Show detailed output instead of compact format")
+	cmd.Flags().StringSlice("tags", nil, "Filter by tags (comma-separated)")
+	cmd.Flags().StringSlice("exclude-tags", nil, "Exclude commands with these tags (comma-separated)")
+	cmd.Flags().String("tag-mode", "any", "Tag matching mode: 'any' or 'all'")
 
 	return cmd
 }
@@ -1818,6 +1852,26 @@ If sync is enabled, this will also change your remote password.`,
 	return cmd
 }
 
+// applyAutoTags applies auto-tagging rules to a command record based on configuration
+func applyAutoTags(record *storage.CommandRecord, cfg *config.Config) {
+	if !cfg.Tags.Enabled || !cfg.Tags.AutoTagging {
+		return
+	}
+
+	command := strings.TrimSpace(record.Command)
+	if command == "" {
+		return
+	}
+
+	// Apply auto-tagging rules from configuration
+	for prefix, tag := range cfg.Tags.AutoTagRules {
+		if strings.HasPrefix(command, prefix) {
+			// Add tag if it doesn't already exist
+			record.AddTag(tag)
+		}
+	}
+}
+
 // recordCmd records a command to history (used by shell hooks)
 func recordCmd(cfg *config.Config) *cobra.Command {
 	cmd := &cobra.Command{
@@ -1891,6 +1945,9 @@ func recordCmd(cfg *config.Config) *cobra.Command {
 			// Enrich record with additional context
 			contextCapture := shell.NewContextCapture()
 			contextCapture.EnrichRecord(record)
+
+			// Apply auto-tagging if enabled
+			applyAutoTags(record, cfg)
 
 			// Store the record
 			secStorage, err := securestorage.NewSecureStorage(&securestorage.StorageOptions{
@@ -4568,6 +4625,333 @@ This helps you find commands by searching their notes content.`,
 				fmt.Printf("ID: %d\n", record.ID)
 				fmt.Printf("Command: %s\n", record.Command)
 				fmt.Printf("Note: %s\n", record.GetNotePreview(100))
+				fmt.Println("---")
+			}
+
+			return nil
+		},
+	}
+}
+
+func tagCmd(cfg *config.Config) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "tag",
+		Short: "Manage tags for command history",
+		Long: `Add, remove, and manage tags for your command history.
+
+Tags help you categorize and organize your commands for easier searching
+and better organization of your command history.`,
+	}
+
+	cmd.AddCommand(tagAddCmd(cfg))
+	cmd.AddCommand(tagRemoveCmd(cfg))
+	cmd.AddCommand(tagListCmd(cfg))
+	cmd.AddCommand(tagShowCmd(cfg))
+	cmd.AddCommand(tagSearchCmd(cfg))
+
+	return cmd
+}
+
+func tagAddCmd(cfg *config.Config) *cobra.Command {
+	return &cobra.Command{
+		Use:   "add <command-id> <tag>",
+		Short: "Add a tag to a command",
+		Long: `Add a tag to a specific command in your history.
+
+The command ID can be found using 'ccr search' or 'ccr tui'.
+Tags are limited to 50 characters and commands can have up to 10 tags.`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// Initialize auth manager
+			authMgr, err := auth.NewAuthManager(cfg)
+			if err != nil {
+				return fmt.Errorf("failed to initialize auth manager: %w", err)
+			}
+			defer authMgr.Close()
+
+			// Get session key
+			sessionKey, err := getSearchSessionKey(authMgr, logger.GetLogger())
+			if err != nil {
+				return err
+			}
+
+			// Initialize secure storage
+			storage, err := securestorage.NewSecureStorage(&securestorage.StorageOptions{
+				Config:              cfg,
+				CreateIfMissing:     false,
+				ValidatePermissions: true,
+			})
+			if err != nil {
+				return fmt.Errorf("failed to initialize storage: %w", err)
+			}
+
+			// Unlock storage with session key
+			if err := storage.UnlockWithKey(sessionKey); err != nil {
+				return fmt.Errorf("failed to unlock storage: %w", err)
+			}
+
+			// Parse command ID
+			commandID := args[0]
+			tag := args[1]
+
+			// Get command by ID
+			record, err := storage.GetCommandByID(commandID)
+			if err != nil {
+				return fmt.Errorf("failed to get command: %w", err)
+			}
+
+			// Add tag to command
+			if err := record.AddTag(tag); err != nil {
+				return fmt.Errorf("failed to add tag: %w", err)
+			}
+
+			// Update command in storage
+			if err := storage.UpdateCommand(record); err != nil {
+				return fmt.Errorf("failed to update command: %w", err)
+			}
+
+			fmt.Printf("✓ Tag '%s' added to command\n", tag)
+			return nil
+		},
+	}
+}
+
+func tagRemoveCmd(cfg *config.Config) *cobra.Command {
+	return &cobra.Command{
+		Use:   "remove <command-id> <tag>",
+		Short: "Remove a tag from a command",
+		Long: `Remove a tag from a specific command in your history.
+
+The command ID can be found using 'ccr search' or 'ccr tui'.`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// Initialize auth manager
+			authMgr, err := auth.NewAuthManager(cfg)
+			if err != nil {
+				return fmt.Errorf("failed to initialize auth manager: %w", err)
+			}
+			defer authMgr.Close()
+
+			// Get session key
+			sessionKey, err := getSearchSessionKey(authMgr, logger.GetLogger())
+			if err != nil {
+				return err
+			}
+
+			// Initialize secure storage
+			storage, err := securestorage.NewSecureStorage(&securestorage.StorageOptions{
+				Config:              cfg,
+				CreateIfMissing:     false,
+				ValidatePermissions: true,
+			})
+			if err != nil {
+				return fmt.Errorf("failed to initialize storage: %w", err)
+			}
+
+			// Unlock storage with session key
+			if err := storage.UnlockWithKey(sessionKey); err != nil {
+				return fmt.Errorf("failed to unlock storage: %w", err)
+			}
+
+			// Parse command ID
+			commandID := args[0]
+			tag := args[1]
+
+			// Get command by ID
+			record, err := storage.GetCommandByID(commandID)
+			if err != nil {
+				return fmt.Errorf("failed to get command: %w", err)
+			}
+
+			// Remove tag from command
+			if removed := record.RemoveTag(tag); !removed {
+				return fmt.Errorf("tag '%s' not found on command", tag)
+			}
+
+			// Update command in storage
+			if err := storage.UpdateCommand(record); err != nil {
+				return fmt.Errorf("failed to update command: %w", err)
+			}
+
+			fmt.Printf("✓ Tag '%s' removed from command\n", tag)
+			return nil
+		},
+	}
+}
+
+func tagListCmd(cfg *config.Config) *cobra.Command {
+	return &cobra.Command{
+		Use:   "list <command-id>",
+		Short: "List tags for a command",
+		Long: `List all tags for a specific command in your history.
+
+The command ID can be found using 'ccr search' or 'ccr tui'.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// Initialize auth manager
+			authMgr, err := auth.NewAuthManager(cfg)
+			if err != nil {
+				return fmt.Errorf("failed to initialize auth manager: %w", err)
+			}
+			defer authMgr.Close()
+
+			// Get session key
+			sessionKey, err := getSearchSessionKey(authMgr, logger.GetLogger())
+			if err != nil {
+				return err
+			}
+
+			// Initialize secure storage
+			storage, err := securestorage.NewSecureStorage(&securestorage.StorageOptions{
+				Config:              cfg,
+				CreateIfMissing:     false,
+				ValidatePermissions: true,
+			})
+			if err != nil {
+				return fmt.Errorf("failed to initialize storage: %w", err)
+			}
+
+			// Unlock storage with session key
+			if err := storage.UnlockWithKey(sessionKey); err != nil {
+				return fmt.Errorf("failed to unlock storage: %w", err)
+			}
+
+			// Parse command ID
+			commandID := args[0]
+
+			// Get command by ID
+			record, err := storage.GetCommandByID(commandID)
+			if err != nil {
+				return fmt.Errorf("failed to get command: %w", err)
+			}
+
+			// Display command and tags
+			fmt.Printf("Command: %s\n", record.Command)
+			if record.HasTags() {
+				fmt.Printf("Tags: %s\n", record.GetTagsString())
+			} else {
+				fmt.Println("No tags found.")
+			}
+
+			return nil
+		},
+	}
+}
+
+func tagShowCmd(cfg *config.Config) *cobra.Command {
+	return &cobra.Command{
+		Use:   "show",
+		Short: "Show all commands with tags",
+		Long: `Show all commands in your history that have tags.
+
+This provides an overview of your tagged commands.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// Initialize auth manager
+			authMgr, err := auth.NewAuthManager(cfg)
+			if err != nil {
+				return fmt.Errorf("failed to initialize auth manager: %w", err)
+			}
+			defer authMgr.Close()
+
+			// Get session key
+			sessionKey, err := getSearchSessionKey(authMgr, logger.GetLogger())
+			if err != nil {
+				return err
+			}
+
+			// Initialize secure storage
+			storage, err := securestorage.NewSecureStorage(&securestorage.StorageOptions{
+				Config:              cfg,
+				CreateIfMissing:     false,
+				ValidatePermissions: true,
+			})
+			if err != nil {
+				return fmt.Errorf("failed to initialize storage: %w", err)
+			}
+
+			// Unlock storage with session key
+			if err := storage.UnlockWithKey(sessionKey); err != nil {
+				return fmt.Errorf("failed to unlock storage: %w", err)
+			}
+
+			// Search for commands with tags
+			records, err := storage.SearchCommandsWithTags()
+			if err != nil {
+				return fmt.Errorf("failed to search commands: %w", err)
+			}
+
+			if len(records) == 0 {
+				fmt.Println("No tagged commands found.")
+				return nil
+			}
+
+			fmt.Printf("Found %d tagged commands:\n\n", len(records))
+			for _, record := range records {
+				fmt.Printf("ID: %d\n", record.ID)
+				fmt.Printf("Command: %s\n", record.Command)
+				fmt.Printf("Tags: %s\n", record.GetTagsString())
+				fmt.Println("---")
+			}
+
+			return nil
+		},
+	}
+}
+
+func tagSearchCmd(cfg *config.Config) *cobra.Command {
+	return &cobra.Command{
+		Use:   "search <tag>",
+		Short: "Search commands by tag",
+		Long: `Search for commands that have a specific tag.
+
+This shows all commands that are tagged with the specified tag.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// Initialize auth manager
+			authMgr, err := auth.NewAuthManager(cfg)
+			if err != nil {
+				return fmt.Errorf("failed to initialize auth manager: %w", err)
+			}
+			defer authMgr.Close()
+
+			// Get session key
+			sessionKey, err := getSearchSessionKey(authMgr, logger.GetLogger())
+			if err != nil {
+				return err
+			}
+
+			// Initialize secure storage
+			storage, err := securestorage.NewSecureStorage(&securestorage.StorageOptions{
+				Config:              cfg,
+				CreateIfMissing:     false,
+				ValidatePermissions: true,
+			})
+			if err != nil {
+				return fmt.Errorf("failed to initialize storage: %w", err)
+			}
+
+			// Unlock storage with session key
+			if err := storage.UnlockWithKey(sessionKey); err != nil {
+				return fmt.Errorf("failed to unlock storage: %w", err)
+			}
+
+			// Search for commands with the specified tag
+			tag := args[0]
+			records, err := storage.SearchCommandsByTag(tag)
+			if err != nil {
+				return fmt.Errorf("failed to search commands: %w", err)
+			}
+
+			if len(records) == 0 {
+				fmt.Printf("No commands found with tag '%s'.\n", tag)
+				return nil
+			}
+
+			fmt.Printf("Found %d commands with tag '%s':\n\n", len(records), tag)
+			for _, record := range records {
+				fmt.Printf("ID: %d\n", record.ID)
+				fmt.Printf("Command: %s\n", record.Command)
+				fmt.Printf("Tags: %s\n", record.GetTagsString())
 				fmt.Println("---")
 			}
 
