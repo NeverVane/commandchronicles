@@ -1744,7 +1744,6 @@ func (m model) renderHelp() string {
 Notes:
   ctrl+n     Edit note for selected command
   ctrl+f+n   Toggle combined notes+commands search
-  ctrl+f+g   Toggle tag search mode
 
   In Note Editor:
   enter      New line
@@ -1753,6 +1752,7 @@ Notes:
 
 Tags:
   ctrl+g     Manage tags for selected command
+  ctrl+f+g   Toggle combined tags+commands search
 
   In Tag Editor:
   enter      New line
@@ -1780,8 +1780,9 @@ Combined Search:
   and note content simultaneously. Results show where matches were found.
 
 Tag Search:
-  When Tag mode is active, searches only in tag names.
-  Use exact tag names to find all commands with that tag.
+  When Tag mode is active, searches fuzzy in tag names.
+  Partial matches work (e.g., 'control' finds 'version-control').
+  Ctrl+F+G cycles: Tags → Commands+Tags → Off.
 
 Time Search:
   1h         Commands from last hour
@@ -2494,7 +2495,7 @@ func (m model) renderDetails() string {
 	footer := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("8")).
 		MarginLeft(2).
-		Render("Enter: select • Tab/Esc: return to search • Ctrl+N: edit note")
+		Render("Enter: select • Tab/Esc: return to search • Ctrl+N: edit note • Ctrl+G: edit tags • Ctrl+F+G: tag search")
 	content.WriteString(footer)
 
 	return content.String()
