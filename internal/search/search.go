@@ -506,6 +506,19 @@ func (s *SearchService) recordMatchesQuery(record *storage.CommandRecord, query 
 		}
 	}
 
+	// Search in tags
+	if record.HasTags() {
+		for _, tag := range record.Tags {
+			tagText := tag
+			if !req.CaseSensitive {
+				tagText = strings.ToLower(tagText)
+			}
+			if strings.Contains(tagText, query) {
+				return true
+			}
+		}
+	}
+
 	return false
 }
 

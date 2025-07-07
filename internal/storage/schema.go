@@ -12,11 +12,12 @@ type CommandRecord struct {
 	ID int64 `json:"id"` // Database record ID for deletion operations
 
 	// Core command information
-	Command  string   `json:"command"`        // The actual command text
-	ExitCode int      `json:"exit_code"`      // Command exit code
-	Duration int64    `json:"duration_ms"`    // Execution duration in milliseconds
-	Note     string   `json:"note,omitempty"` // Optional user note about the command
-	Tags     []string `json:"tags,omitempty"` // Optional tags for command categorization
+	Command   string            `json:"command"`              // The actual command text
+	ExitCode  int               `json:"exit_code"`            // Command exit code
+	Duration  int64             `json:"duration_ms"`          // Execution duration in milliseconds
+	Note      string            `json:"note,omitempty"`       // Optional user note about the command
+	Tags      []string          `json:"tags,omitempty"`       // Optional tags for command categorization
+	TagColors map[string]string `json:"tag_colors,omitempty"` // Optional per-command tag colors (tag_name -> hex_color)
 
 	// Context information
 	WorkingDir string `json:"working_dir"`  // Directory where command was executed
@@ -313,22 +314,59 @@ func (cr *CommandRecord) GetTagsString() string {
 
 // SetTags sets the tags for the command with validation
 func (cr *CommandRecord) SetTags(tags []string) error {
-	if len(tags) > MaxTagsPerCommand {
-		return fmt.Errorf("command cannot have more than %d tags", MaxTagsPerCommand)
-	}
-
 	var validTags []string
 	for _, tag := range tags {
 		trimmed := strings.TrimSpace(tag)
-		if trimmed != "" {
+		// Skip empty tags, tags that are only dashes, or whitespace
+		if trimmed != "" && trimmed != "-" && strings.TrimSpace(strings.ReplaceAll(trimmed, "-", "")) != "" {
 			if len(trimmed) > MaxTagLength {
 				return fmt.Errorf("tag '%s' exceeds maximum length of %d characters", trimmed, MaxTagLength)
 			}
 			validTags = append(validTags, trimmed)
 		}
 	}
+
+	// Check tag count after filtering empty tags
+	if len(validTags) > MaxTagsPerCommand {
+		return fmt.Errorf("command cannot have more than %d tags", MaxTagsPerCommand)
+	}
+
 	cr.Tags = validTags
 	return nil
+}
+
+// GetTagColor returns the color for a given tag name from this command's TagColors
+func (cr *CommandRecord) GetTagColor(tagName string) string {
+	if cr.TagColors != nil {
+		if color, exists := cr.TagColors[tagName]; exists {
+			return color
+		}
+	}
+	return "" // Empty string means use global preference or default
+}
+
+// SetTagColor sets the color for a tag in this command's TagColors
+func (cr *CommandRecord) SetTagColor(tagName, color string) {
+	if cr.TagColors == nil {
+		cr.TagColors = make(map[string]string)
+	}
+	cr.TagColors[tagName] = color
+}
+
+// ClearTagColor removes a tag's color from this command's TagColors
+func (cr *CommandRecord) ClearTagColor(tagName string) {
+	if cr.TagColors != nil {
+		delete(cr.TagColors, tagName)
+	}
+}
+
+// HasTagColor checks if this command has a specific color set for a tag
+func (cr *CommandRecord) HasTagColor(tagName string) bool {
+	if cr.TagColors == nil {
+		return false
+	}
+	_, exists := cr.TagColors[tagName]
+	return exists
 }
 
 // GetSearchableFields returns fields that can be searched without decryption
@@ -351,7 +389,7 @@ const (
 	MaxEnvironmentSize  = 8192  // Maximum total size of environment data
 	MaxNoteLength       = 1000  // Maximum note text length
 	MaxTagLength        = 50    // Maximum tag name length
-	MaxTagsPerCommand   = 10    // Maximum number of tags per command
+	MaxTagsPerCommand   = 5     // Maximum number of tags per command
 
 	// Schema version constants
 	CurrentSchemaVersion = 2

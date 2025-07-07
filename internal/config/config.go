@@ -332,6 +332,15 @@ type TagsConfig struct {
 
 	// Separator for tag display (default: ", ")
 	DisplaySeparator string `toml:"display_separator"`
+
+	// Tag color preferences (tag name -> hex color code)
+	TagColors map[string]string `toml:"tag_colors"`
+
+	// Last updated timestamps for tag colors (tag name -> unix timestamp)
+	TagColorsUpdated map[string]int64 `toml:"tag_colors_updated"`
+
+	// Default color for new tags (hex color code)
+	DefaultColor string `toml:"default_color"`
 }
 
 // DefaultConfig returns a configuration with sensible defaults
@@ -476,6 +485,9 @@ func DefaultConfig() *Config {
 			},
 			ShowIndicators:   true,
 			DisplaySeparator: ", ",
+			TagColors:        make(map[string]string),
+			TagColorsUpdated: make(map[string]int64),
+			DefaultColor:     "#00FFFF", // cyan
 		},
 		DataDir:   dataDir,
 		ConfigDir: configDir,

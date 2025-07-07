@@ -50,6 +50,9 @@ const (
 	ModeWipeConfirm
 	ModeNoteEdit
 	ModeTagEdit
+	ModeTagSelect
+	ModeTagColor
+	ModeAutoTagRules
 )
 
 // TUISession represents an active TUI session with all required services
@@ -218,7 +221,6 @@ func (i CommandItem) Title() string {
 	// Add tag display if command has tags
 	tagDisplay := ""
 	if i.record != nil && i.record.HasTags() && len(i.record.Tags) > 0 {
-		tagStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
 		tags := i.record.Tags
 
 		// Limit number of tags shown
@@ -234,11 +236,17 @@ func (i CommandItem) Title() string {
 			if idx > 0 {
 				tagDisplay += " "
 			}
+
+			// Get color for this tag (command override -> global preference -> default)
+			tagColor := i.config.GetTagColor(tag, i.record.TagColors)
+			tagStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(tagColor))
 			tagDisplay += tagStyle.Render(fmt.Sprintf("#%s", tag))
 		}
 
 		if len(i.record.Tags) > maxTags {
-			tagDisplay += tagStyle.Render("...")
+			// Use default color for ellipsis
+			ellipsisStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(i.config.Tags.DefaultColor))
+			tagDisplay += ellipsisStyle.Render("...")
 		}
 
 		if tagDisplay != "" {
@@ -455,8 +463,28 @@ type model struct {
 	tagEditSuccess     bool
 	tagEditError       error
 
+	// Tag selection state
+	tagSelectRecordID int64
+	tagSelectRecord   *storage.CommandRecord
+	tagSelectSelected int
+	tagSelectError    error
+
+	// Tag color picker state
+	colorPickerRecordID int64
+	colorPickerRecord   *storage.CommandRecord
+	colorPickerTagName  string
+	colorPickerSelected int
+	colorPickerSuccess  bool
+	colorPickerError    error
+
+	// Auto-tag rules management state
+	autoTagRulesSelected int
+	autoTagRulesError    error
+
 	// Phase 3: Combined search state
 	combinedSearchMode bool
+	tagSearchMode      bool
+	combinedTagSearch  bool
 	keySequenceState   string
 	keySequenceTimeout time.Time
 	searchNotesOnly    bool
@@ -676,6 +704,27 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.tagEditOriginal = ""
 				m.tagEditError = nil
 				return m, nil
+			case ModeTagSelect:
+				// Cancel tag selection and return to tag edit mode
+				m.mode = ModeTagEdit
+				m.tagSelectRecordID = 0
+				m.tagSelectRecord = nil
+				m.tagSelectError = nil
+				return m, nil
+			case ModeTagColor:
+				// Cancel color picker and return to tag select mode
+				m.mode = ModeTagSelect
+				m.colorPickerRecordID = 0
+				m.colorPickerRecord = nil
+				m.colorPickerTagName = ""
+				m.colorPickerError = nil
+				return m, nil
+			case ModeAutoTagRules:
+				// Cancel auto-tag rules and return to search mode
+				m.mode = ModeSearch
+				m.autoTagRulesSelected = 0
+				m.autoTagRulesError = nil
+				return m, nil
 			default:
 				// In search mode, ESC quits the application
 				return m, tea.Quit
@@ -697,6 +746,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleNoteEditKeys(msg)
 		case ModeTagEdit:
 			return m.handleTagEditKeys(msg)
+		case ModeTagSelect:
+			return m.handleTagSelectKeys(msg)
+		case ModeTagColor:
+			return m.handleColorPickerKeys(msg)
+		case ModeAutoTagRules:
+			return m.handleAutoTagRulesKeys(msg)
 		default:
 			return m.handleSearchKeys(msg)
 		}
@@ -704,7 +759,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case keySequenceTimeoutMsg:
 		// Reset key sequence state on timeout
 		if time.Now().After(m.keySequenceTimeout) {
-			// Just clear the sequence state - fuzzy toggle already happened immediately
+			if m.keySequenceState == "ctrl+f" {
+				// Timeout occurred, treat as simple fuzzy toggle
+				m.fuzzyEnabled = !m.fuzzyEnabled
+				m.session.logger.Info().
+					Bool("fuzzy_enabled", m.fuzzyEnabled).
+					Str("current_query", m.searchInput.Value()).
+					Msg("Toggled fuzzy search - sequence timeout")
+				m.keySequenceState = ""
+				return m, m.performSearch()
+			}
 			m.keySequenceState = ""
 		}
 		return m, nil
@@ -810,6 +874,12 @@ func (m model) View() string {
 		return m.renderNoteEdit()
 	case ModeTagEdit:
 		return m.renderTagEdit()
+	case ModeTagSelect:
+		return m.renderTagSelect()
+	case ModeTagColor:
+		return m.renderColorPicker()
+	case ModeAutoTagRules:
+		return m.renderAutoTagRules()
 	default:
 		return m.renderSearch()
 	}
@@ -999,6 +1069,17 @@ func (m model) renderStatus() string {
 		}
 	}
 
+	// Search mode indicators
+	if m.combinedSearchMode && m.tagSearchMode {
+		parts = append(parts, "Mode: Commands+Notes+Tags")
+	} else if m.combinedSearchMode {
+		parts = append(parts, "Mode: Commands+Notes")
+	} else if m.tagSearchMode && m.combinedTagSearch {
+		parts = append(parts, "Mode: Commands+Tags")
+	} else if m.tagSearchMode {
+		parts = append(parts, "Mode: Tags")
+	}
+
 	// Selected item position
 	if m.filteredRecords > 0 {
 		selectedIdx := m.list.Index()
@@ -1071,25 +1152,34 @@ func (m model) handleSearchKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = ModeHelp
 
 	case key.Matches(msg, m.keys.Fuzzy):
-		// Immediately toggle fuzzy search (preserve original behavior)
+		// Check if we're already in a key sequence
+		if m.keySequenceState == "ctrl+f" && time.Now().Before(m.keySequenceTimeout) {
+			// Second Ctrl+F in sequence, just toggle fuzzy and reset
+			m.fuzzyEnabled = !m.fuzzyEnabled
+			m.keySequenceState = ""
+			m.session.logger.Info().
+				Bool("fuzzy_enabled", m.fuzzyEnabled).
+				Str("current_query", m.searchInput.Value()).
+				Msg("Toggled fuzzy search - sequence cancelled")
+			return m, m.performSearch()
+		}
+
+		// Start key sequence tracking for potential combinations
+		if m.keySequenceState == "" {
+			m.keySequenceState = "ctrl+f"
+			m.keySequenceTimeout = time.Now().Add(1500 * time.Millisecond) // 1.5 seconds
+			// Start timeout ticker but don't perform search yet
+			return m, tea.Tick(200*time.Millisecond, func(t time.Time) tea.Msg {
+				return keySequenceTimeoutMsg{}
+			})
+		}
+
+		// Default: just toggle fuzzy search
 		m.fuzzyEnabled = !m.fuzzyEnabled
 		m.session.logger.Info().
 			Bool("fuzzy_enabled", m.fuzzyEnabled).
 			Str("current_query", m.searchInput.Value()).
-			Msg("Toggled fuzzy search - performing new search")
-
-		// Also start key sequence tracking for potential Ctrl+F+N combination
-		if m.keySequenceState == "" {
-			m.keySequenceState = "ctrl+f"
-			m.keySequenceTimeout = time.Now().Add(2 * time.Second)
-			// Start timeout ticker and perform search
-			return m, tea.Batch(
-				m.performSearch(),
-				tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
-					return keySequenceTimeoutMsg{}
-				}),
-			)
-		}
+			Msg("Toggled fuzzy search")
 		return m, m.performSearch()
 
 	case key.Matches(msg, m.keys.Syntax):
@@ -1116,6 +1206,13 @@ func (m model) handleSearchKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, m.keys.Stats):
 		return m.enterStatsMode()
 
+	case key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+a"))):
+		// Enter auto-tag rules management
+		m.mode = ModeAutoTagRules
+		m.autoTagRulesSelected = 0
+		m.autoTagRulesError = nil
+		return m, nil
+
 	case key.Matches(msg, m.keys.Delete):
 		// Delete the currently selected record
 		if len(m.list.Items()) > 0 {
@@ -1128,7 +1225,31 @@ func (m model) handleSearchKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case key.Matches(msg, m.keys.TagManage):
-		// Start tag editing mode for selected command
+		// Handle compound key sequence or direct tag editing
+		if m.keySequenceState == "ctrl+f" && time.Now().Before(m.keySequenceTimeout) {
+			// Complete the ctrl+f+g sequence for tag search - cycle through modes
+			m.keySequenceState = ""
+			if !m.tagSearchMode {
+				// First press: tags only
+				m.tagSearchMode = true
+				m.combinedTagSearch = false
+			} else if !m.combinedTagSearch {
+				// Second press: commands + tags
+				m.combinedTagSearch = true
+			} else {
+				// Third press: turn off tag search
+				m.tagSearchMode = false
+				m.combinedTagSearch = false
+			}
+			m.session.logger.Info().
+				Bool("tag_search_mode", m.tagSearchMode).
+				Bool("combined_tag_search", m.combinedTagSearch).
+				Str("current_query", m.searchInput.Value()).
+				Msg("Cycled tag search mode")
+			return m, m.performSearch()
+		}
+
+		// Regular tag editing
 		if len(m.list.Items()) > 0 {
 			if item, ok := m.list.SelectedItem().(CommandItem); ok {
 				return m.enterTagEditMode(item.record)
@@ -1139,8 +1260,6 @@ func (m model) handleSearchKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Handle compound key sequence or direct note editing
 		if m.keySequenceState == "ctrl+f" && time.Now().Before(m.keySequenceTimeout) {
 			// Complete the ctrl+f+n sequence for combined search
-			// First undo the fuzzy toggle that just happened
-			m.fuzzyEnabled = !m.fuzzyEnabled
 			m.keySequenceState = ""
 			m.combinedSearchMode = !m.combinedSearchMode
 			m.session.logger.Info().
@@ -1426,6 +1545,13 @@ func (m model) handleTagEditKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Save tags
 		return m.saveTag()
 
+	case key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+t"))):
+		// Enter tag selection mode (changed from ctrl+c to ctrl+t)
+		if m.tagEditingRecord != nil && len(m.tagEditingRecord.Tags) > 0 {
+			return m.enterTagSelectMode(m.tagEditingRecord)
+		}
+		return m, nil
+
 	case key.Matches(msg, key.NewBinding(key.WithKeys("esc"))):
 		// Cancel editing
 		m.mode = ModeDetails
@@ -1457,8 +1583,14 @@ func (m model) saveTag() (tea.Model, tea.Cmd) {
 		tagParts := strings.Split(tagInput, ",")
 		for _, tag := range tagParts {
 			trimmed := strings.TrimSpace(tag)
-			if trimmed != "" {
-				tags = append(tags, trimmed)
+			// Skip empty tags and tags that are only whitespace/dashes
+			if trimmed != "" && trimmed != "-" && strings.TrimSpace(strings.ReplaceAll(trimmed, "-", "")) != "" {
+				// Replace spaces with dashes for tag names
+				normalizedTag := strings.ReplaceAll(trimmed, " ", "-")
+				// Final check to avoid tags that became empty after normalization
+				if normalizedTag != "" && normalizedTag != "-" {
+					tags = append(tags, normalizedTag)
+				}
 			}
 		}
 	}
@@ -1599,25 +1731,44 @@ func (m model) renderHelp() string {
 Notes:
   ctrl+n     Edit note for selected command
   ctrl+f+n   Toggle combined notes+commands search
+  ctrl+f+g   Toggle tag search mode
 
   In Note Editor:
   enter      New line
   ctrl+s     Save note
   esc        Cancel editing
 
+Tags:
+  ctrl+g     Manage tags for selected command
+
+  In Tag Editor:
+  enter      New line
+  ctrl+s     Save tags
+  ctrl+t     Color picker for tags
+  esc        Cancel editing
+
+  In Color Picker:
+  ↑/↓        Navigate colors
+  enter      Select color
+  esc        Cancel
+
 Search:
   Type anything to search (all letters/numbers work!)
-  ctrl+f     Toggle fuzzy search mode (or start ctrl+f+n sequence)
+  ctrl+f     Toggle fuzzy search mode (or start sequences)
   ctrl+s     Toggle success-only filter
   ctrl+x     Toggle failure-only filter
   ctrl+k     Clear search input
   ctrl+l     Refresh search results
   ctrl+t     Show statistics view
-  ctrl+g     Manage tags for selected command
+  ctrl+a     Auto-tagging rules management
 
 Combined Search:
   When N+C mode is active, searches both command text
   and note content simultaneously. Results show where matches were found.
+
+Tag Search:
+  When Tag mode is active, searches only in tag names.
+  Use exact tag names to find all commands with that tag.
 
 Time Search:
   1h         Commands from last hour
@@ -1651,6 +1802,377 @@ General:
 }
 
 // renderTagEdit renders the tag editing interface
+
+// enterTagSelectMode enters tag selection mode to choose which tag to color
+func (m model) enterTagSelectMode(record *storage.CommandRecord) (tea.Model, tea.Cmd) {
+	m.mode = ModeTagSelect
+	m.tagSelectRecordID = record.ID
+	m.tagSelectRecord = record
+	m.tagSelectSelected = 0
+	m.tagSelectError = nil
+	return m, nil
+}
+
+// handleTagSelectKeys handles key events in tag selection mode
+func (m model) handleTagSelectKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, key.NewBinding(key.WithKeys("up"))):
+		if m.tagSelectSelected > 0 {
+			m.tagSelectSelected--
+		}
+
+	case key.Matches(msg, key.NewBinding(key.WithKeys("down"))):
+		if m.tagSelectRecord != nil && m.tagSelectSelected < len(m.tagSelectRecord.Tags)-1 {
+			m.tagSelectSelected++
+		}
+
+	case key.Matches(msg, key.NewBinding(key.WithKeys("enter"))):
+		// Select tag and proceed to color picker
+		if m.tagSelectRecord != nil && m.tagSelectSelected < len(m.tagSelectRecord.Tags) {
+			selectedTag := m.tagSelectRecord.Tags[m.tagSelectSelected]
+			return m.enterColorPickerMode(m.tagSelectRecord, selectedTag)
+		}
+		return m, nil
+
+	case key.Matches(msg, key.NewBinding(key.WithKeys("esc"))):
+		// Cancel and return to tag edit mode
+		m.mode = ModeTagEdit
+		m.tagSelectRecordID = 0
+		m.tagSelectRecord = nil
+		m.tagSelectError = nil
+		return m, nil
+	}
+
+	return m, nil
+}
+
+// renderTagSelect renders the tag selection interface
+func (m model) renderTagSelect() string {
+	if m.tagSelectRecord == nil {
+		return "No command selected for tag selection"
+	}
+
+	var content strings.Builder
+
+	// Title
+	title := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("12")).
+		MarginLeft(2).
+		Render("Select Tag to Color")
+	content.WriteString(title + "\n\n")
+
+	// Command being edited
+	commandTitle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("11")).
+		MarginLeft(2).
+		Render("Command:")
+	content.WriteString(commandTitle + "\n")
+
+	commandText := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("15")).
+		MarginLeft(4).
+		Render(m.tagSelectRecord.Command)
+	content.WriteString(commandText + "\n\n")
+
+	// Tags list
+	tagsTitle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("11")).
+		MarginLeft(2).
+		Render("Tags:")
+	content.WriteString(tagsTitle + "\n")
+
+	for i, tag := range m.tagSelectRecord.Tags {
+		prefix := "  "
+		if i == m.tagSelectSelected {
+			prefix = "→ "
+		}
+
+		// Show current color for the tag
+		currentColor := m.session.config.GetTagColor(tag, m.tagSelectRecord.TagColors)
+		colorPreview := lipgloss.NewStyle().
+			Foreground(lipgloss.Color(currentColor)).
+			Render("■")
+
+		tagLine := fmt.Sprintf("%s%s #%s", prefix, colorPreview, tag)
+		content.WriteString(tagLine + "\n")
+	}
+
+	// Instructions
+	content.WriteString("\n")
+	instructionsStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("8")).
+		MarginLeft(2)
+	content.WriteString(instructionsStyle.Render("↑/↓: navigate • enter: select tag • esc: cancel") + "\n\n")
+
+	// Error message
+	if m.tagSelectError != nil {
+		errorMsg := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("9")).
+			MarginLeft(2).
+			Render(fmt.Sprintf("✗ Error: %s", m.tagSelectError.Error()))
+		content.WriteString(errorMsg + "\n")
+	}
+
+	return content.String()
+}
+
+// enterColorPickerMode enters color picker mode for a specific tag
+func (m model) enterColorPickerMode(record *storage.CommandRecord, tagName string) (tea.Model, tea.Cmd) {
+	m.mode = ModeTagColor
+	m.colorPickerRecordID = record.ID
+	m.colorPickerRecord = record
+	m.colorPickerTagName = tagName
+	m.colorPickerSelected = 0
+	m.colorPickerError = nil
+	m.colorPickerSuccess = false
+
+	// Find current color index if it exists
+	currentColor := m.session.config.GetTagColor(tagName, record.TagColors)
+	if currentIndex := config.GetTagColorIndex(currentColor); currentIndex != -1 {
+		m.colorPickerSelected = currentIndex
+	}
+
+	return m, nil
+}
+
+// handleColorPickerKeys handles key events in color picker mode
+func (m model) handleColorPickerKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, key.NewBinding(key.WithKeys("up"))):
+		if m.colorPickerSelected > 0 {
+			m.colorPickerSelected--
+		}
+
+	case key.Matches(msg, key.NewBinding(key.WithKeys("down"))):
+		if m.colorPickerSelected < len(config.TagColorCodes)-1 {
+			m.colorPickerSelected++
+		}
+
+	case key.Matches(msg, key.NewBinding(key.WithKeys("enter"))):
+		// Select color
+		return m.selectTagColor()
+
+	case key.Matches(msg, key.NewBinding(key.WithKeys("esc"))):
+		// Cancel color picker and return to tag select mode
+		m.mode = ModeTagSelect
+		m.colorPickerRecordID = 0
+		m.colorPickerRecord = nil
+		m.colorPickerTagName = ""
+		m.colorPickerError = nil
+		return m, nil
+	}
+
+	return m, nil
+}
+
+// selectTagColor applies the selected color to the tag
+func (m model) selectTagColor() (tea.Model, tea.Cmd) {
+	if m.colorPickerRecord == nil || m.colorPickerTagName == "" {
+		m.colorPickerError = fmt.Errorf("no tag selected")
+		return m, nil
+	}
+
+	selectedColor := config.GetTagColorByIndex(m.colorPickerSelected)
+
+	// Set color in global preferences
+	m.session.config.SetTagColor(m.colorPickerTagName, selectedColor)
+
+	// Save config
+	configPath := filepath.Join(m.session.config.ConfigDir, "config.toml")
+	if err := m.session.config.Save(configPath); err != nil {
+		m.colorPickerError = fmt.Errorf("failed to save color preference: %w", err)
+		return m, nil
+	}
+
+	m.colorPickerSuccess = true
+	m.colorPickerError = nil
+
+	// Return to tag select mode
+	m.mode = ModeTagSelect
+	return m, nil
+}
+
+// renderColorPicker renders the color picker interface
+func (m model) renderColorPicker() string {
+	if m.colorPickerRecord == nil || m.colorPickerTagName == "" {
+		return "No tag selected for color picker"
+	}
+
+	var content strings.Builder
+
+	// Title
+	title := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("12")).
+		MarginLeft(2).
+		Render("Choose Color for Tag")
+	content.WriteString(title + "\n\n")
+
+	// Tag name
+	tagTitle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("11")).
+		MarginLeft(2).
+		Render(fmt.Sprintf("Tag: #%s", m.colorPickerTagName))
+	content.WriteString(tagTitle + "\n\n")
+
+	// Color options
+	colors := config.GetAllTagColors()
+	for i, colorInfo := range colors {
+		prefix := "  "
+		if i == m.colorPickerSelected {
+			prefix = "→ "
+		}
+
+		colorPreview := lipgloss.NewStyle().
+			Foreground(lipgloss.Color(colorInfo.Code)).
+			Render("■■■")
+
+		colorLine := fmt.Sprintf("%s%s %s (%d)", prefix, colorPreview, colorInfo.Name, i)
+		content.WriteString(colorLine + "\n")
+	}
+
+	// Instructions
+	content.WriteString("\n")
+	instructionsStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("8")).
+		MarginLeft(2)
+	content.WriteString(instructionsStyle.Render("↑/↓: navigate • enter: select • esc: cancel") + "\n\n")
+
+	// Success/error messages
+	if m.colorPickerSuccess {
+		successMsg := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("10")).
+			MarginLeft(2).
+			Render("✓ Color preference saved!")
+		content.WriteString(successMsg + "\n")
+	}
+
+	if m.colorPickerError != nil {
+		errorMsg := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("9")).
+			MarginLeft(2).
+			Render(fmt.Sprintf("✗ Error: %s", m.colorPickerError.Error()))
+		content.WriteString(errorMsg + "\n")
+	}
+
+	return content.String()
+}
+
+// handleAutoTagRulesKeys handles key events in auto-tag rules mode
+func (m model) handleAutoTagRulesKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, key.NewBinding(key.WithKeys("up"))):
+		if m.autoTagRulesSelected > 0 {
+			m.autoTagRulesSelected--
+		}
+
+	case key.Matches(msg, key.NewBinding(key.WithKeys("down"))):
+		ruleCount := len(m.session.config.Tags.AutoTagRules)
+		if m.autoTagRulesSelected < ruleCount-1 {
+			m.autoTagRulesSelected++
+		}
+
+	case key.Matches(msg, key.NewBinding(key.WithKeys("enter"))):
+		// TODO: Edit selected rule
+		return m, nil
+
+	case key.Matches(msg, key.NewBinding(key.WithKeys("d", "delete"))):
+		// TODO: Delete selected rule
+		return m, nil
+
+	case key.Matches(msg, key.NewBinding(key.WithKeys("n"))):
+		// TODO: Add new rule
+		return m, nil
+
+	case key.Matches(msg, key.NewBinding(key.WithKeys("r"))):
+		// TODO: Apply rules retroactively
+		return m, nil
+
+	case key.Matches(msg, key.NewBinding(key.WithKeys("esc"))):
+		// Return to search mode
+		m.mode = ModeSearch
+		m.autoTagRulesSelected = 0
+		m.autoTagRulesError = nil
+		return m, nil
+	}
+
+	return m, nil
+}
+
+// renderAutoTagRules renders the auto-tag rules management interface
+func (m model) renderAutoTagRules() string {
+	var content strings.Builder
+
+	// Title
+	title := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("12")).
+		MarginLeft(2).
+		Render("Auto-Tagging Rules Management")
+	content.WriteString(title + "\n\n")
+
+	// Status
+	statusStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("8")).
+		MarginLeft(2)
+
+	enabledStatus := "Disabled"
+	if m.session.config.Tags.AutoTagging {
+		enabledStatus = "Enabled"
+	}
+	content.WriteString(statusStyle.Render(fmt.Sprintf("Auto-tagging: %s", enabledStatus)) + "\n\n")
+
+	// Rules list
+	rulesTitle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("11")).
+		MarginLeft(2).
+		Render("Rules:")
+	content.WriteString(rulesTitle + "\n")
+
+	if len(m.session.config.Tags.AutoTagRules) == 0 {
+		noRulesMsg := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("8")).
+			MarginLeft(4).
+			Render("No auto-tagging rules configured")
+		content.WriteString(noRulesMsg + "\n")
+	} else {
+		ruleIndex := 0
+		for prefix, tag := range m.session.config.Tags.AutoTagRules {
+			cursor := "  "
+			if ruleIndex == m.autoTagRulesSelected {
+				cursor = "→ "
+			}
+
+			ruleText := fmt.Sprintf("%s%s → #%s", cursor, prefix, tag)
+			content.WriteString(ruleText + "\n")
+			ruleIndex++
+		}
+	}
+
+	// Instructions
+	content.WriteString("\n")
+	instructionsStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("8")).
+		MarginLeft(2)
+	content.WriteString(instructionsStyle.Render("↑/↓: navigate • enter: edit • d: delete • n: new rule • r: apply retroactively • esc: back") + "\n\n")
+
+	// Error message
+	if m.autoTagRulesError != nil {
+		errorMsg := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("9")).
+			MarginLeft(2).
+			Render(fmt.Sprintf("✗ Error: %s", m.autoTagRulesError.Error()))
+		content.WriteString(errorMsg + "\n")
+	}
+
+	return content.String()
+}
+
 func (m model) renderTagEdit() string {
 	if m.tagEditingRecord == nil {
 		return "No command selected for tag editing"
@@ -1868,14 +2390,16 @@ func (m model) renderDetails() string {
 			Render("Tags:")
 		content.WriteString(tagsTitle + "\n")
 
-		tagStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("6")).
-			MarginLeft(4)
-
 		for i, tag := range record.Tags {
 			if i > 0 {
 				content.WriteString(" ")
 			}
+
+			// Get color for this tag (command override -> global preference -> default)
+			tagColor := item.config.GetTagColor(tag, record.TagColors)
+			tagStyle := lipgloss.NewStyle().
+				Foreground(lipgloss.Color(tagColor)).
+				MarginLeft(4)
 			content.WriteString(tagStyle.Render(fmt.Sprintf("#%s", tag)))
 		}
 		content.WriteString("\n")
@@ -2765,6 +3289,76 @@ func (m model) performSearch() tea.Cmd {
 				Int("command_matches", len(response.Records)-len(noteMatches)).
 				Int("note_matches", len(noteMatches)).
 				Msg("Combined search completed")
+		} else if m.tagSearchMode && effectiveQuery != "" {
+			if m.combinedTagSearch {
+				m.session.logger.Debug().
+					Str("query", effectiveQuery).
+					Msg("Performing combined commands+tags search")
+
+				// First, search commands normally
+				response, err = m.session.searchService.Search(req)
+				if err != nil {
+					m.session.logger.Error().
+						Err(err).
+						Str("query", effectiveQuery).
+						Msg("Combined tag search failed")
+					return searchResultMsg{err: fmt.Errorf("combined tag search failed: %w", err), timeFilter: timeFilter}
+				}
+
+				// Then, search for commands by tag and merge
+				tagMatches, err := m.session.storage.SearchCommandsByTag(effectiveQuery)
+				if err != nil {
+					m.session.logger.Warn().
+						Err(err).
+						Str("query", effectiveQuery).
+						Msg("Tag search portion failed, continuing with command results only")
+				} else {
+					// Merge results, avoiding duplicates
+					commandIDs := make(map[int64]bool)
+					for _, record := range response.Records {
+						commandIDs[record.ID] = true
+					}
+
+					// Add tag matches that aren't already in command results
+					for _, tagRecord := range tagMatches {
+						if !commandIDs[tagRecord.ID] {
+							response.Records = append(response.Records, tagRecord)
+						}
+					}
+
+					m.session.logger.Debug().
+						Int("total_combined_results", len(response.Records)).
+						Int("command_matches", len(response.Records)-len(tagMatches)).
+						Int("tag_matches", len(tagMatches)).
+						Msg("Combined commands+tags search completed")
+				}
+			} else {
+				m.session.logger.Debug().
+					Str("query", effectiveQuery).
+					Msg("Performing tag search")
+
+				// Search for commands that have tags matching the query
+				tagMatches, err := m.session.storage.SearchCommandsByTag(effectiveQuery)
+				if err != nil {
+					m.session.logger.Error().
+						Err(err).
+						Str("query", effectiveQuery).
+						Msg("Tag search failed")
+					return searchResultMsg{err: fmt.Errorf("tag search failed: %w", err), timeFilter: timeFilter}
+				}
+
+				m.session.logger.Debug().
+					Int("tag_matches", len(tagMatches)).
+					Msg("Tag search completed")
+
+				// Create response with tag matches
+				response = &search.SearchResponse{
+					Records:      tagMatches,
+					TotalMatches: len(tagMatches),
+					FromCache:    0,
+					FromBatches:  len(tagMatches),
+				}
+			}
 		} else {
 			// Regular search
 			m.session.logger.Debug().
@@ -3027,6 +3621,9 @@ func (m model) performDeletion(recordID int64) tea.Cmd {
 func (m model) resetFilters() model {
 	m.showSuccessOnly = false
 	m.showFailuresOnly = false
+	m.combinedSearchMode = false
+	m.tagSearchMode = false
+	m.combinedTagSearch = false
 	return m
 }
 

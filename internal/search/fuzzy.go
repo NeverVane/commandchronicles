@@ -432,7 +432,19 @@ func (f *FuzzySearchEngine) buildSearchQuery(searchQuery string, opts *FuzzySear
 		boolQuery.AddShould(gitQuery)
 	}
 
-	// 7. Add boost queries for recent and frequent commands
+	// 7. Include tags search
+	tagsQuery := bleve.NewWildcardQuery("*" + searchQuery + "*")
+	tagsQuery.SetField("tags")
+	tagsQuery.SetBoost(0.4)
+	boolQuery.AddShould(tagsQuery)
+
+	// 8. Include notes search
+	notesQuery := bleve.NewMatchQuery(searchQuery)
+	notesQuery.SetField("note")
+	notesQuery.SetBoost(0.6)
+	boolQuery.AddShould(notesQuery)
+
+	// 9. Add boost queries for recent and frequent commands
 	finalQuery := boolQuery
 	if opts.BoostRecent > 0 || opts.BoostFrequent > 0 {
 		boostQuery := bleve.NewBooleanQuery()

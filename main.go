@@ -961,7 +961,7 @@ Use without arguments to search all commands. Use --tui flag to open interactive
 			for i, record := range response.Records {
 				if verboseOutput {
 					// Detailed format
-					fmt.Printf("[%d] %s", i+1, record.Command)
+					fmt.Printf("[%d] %s", record.ID, record.Command)
 
 					// Add tags if present
 					if record.HasTags() {
@@ -1054,7 +1054,7 @@ Use without arguments to search all commands. Use --tui flag to open interactive
 
 					// Compact single line with consistent spacing and colors
 					fmt.Printf("  %s %s %-60s %s %s\n",
-						indexStyle.Render(fmt.Sprintf("%2d", i+1)),
+						indexStyle.Render(fmt.Sprintf("%d", record.ID)),
 						separatorStyle.Render("│"),
 						commandStyle.Render(record.Command),
 						separatorStyle.Render("│"),
@@ -1854,22 +1854,53 @@ If sync is enabled, this will also change your remote password.`,
 
 // applyAutoTags applies auto-tagging rules to a command record based on configuration
 func applyAutoTags(record *storage.CommandRecord, cfg *config.Config) {
+	log := logger.GetLogger().WithComponent("auto-tag")
+
+	log.Debug().
+		Bool("tags_enabled", cfg.Tags.Enabled).
+		Bool("auto_tagging", cfg.Tags.AutoTagging).
+		Str("command", record.Command).
+		Int("rule_count", len(cfg.Tags.AutoTagRules)).
+		Msg("Processing auto-tagging")
+
 	if !cfg.Tags.Enabled || !cfg.Tags.AutoTagging {
+		log.Debug().Msg("Auto-tagging disabled")
+
 		return
 	}
 
 	command := strings.TrimSpace(record.Command)
 	if command == "" {
+		log.Debug().Msg("Empty command, skipping auto-tagging")
 		return
 	}
 
 	// Apply auto-tagging rules from configuration
+	appliedTags := 0
 	for prefix, tag := range cfg.Tags.AutoTagRules {
 		if strings.HasPrefix(command, prefix) {
+			log.Debug().
+				Str("prefix", prefix).
+				Str("tag", tag).
+				Msg("Auto-tag rule matched, adding tag")
+
 			// Add tag if it doesn't already exist
-			record.AddTag(tag)
+			if err := record.AddTag(tag); err != nil {
+				log.Warn().
+					Err(err).
+					Str("tag", tag).
+					Msg("Failed to add auto-tag")
+
+			} else {
+				appliedTags++
+			}
 		}
 	}
+
+	log.Debug().
+		Int("applied_tags", appliedTags).
+		Strs("final_tags", record.Tags).
+		Msg("Auto-tagging completed")
 }
 
 // recordCmd records a command to history (used by shell hooks)
@@ -1946,7 +1977,7 @@ func recordCmd(cfg *config.Config) *cobra.Command {
 			contextCapture := shell.NewContextCapture()
 			contextCapture.EnrichRecord(record)
 
-			// Apply auto-tagging if enabled
+			// Apply auto-tagging if enabled (do this BEFORE storage operations to avoid early exits)
 			applyAutoTags(record, cfg)
 
 			// Store the record
