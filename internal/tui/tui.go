@@ -1044,8 +1044,7 @@ func (m model) renderHeader() string {
 			warningText = fmt.Sprintf("*** CRITICAL UPDATE: v%s ***", m.updateInfo.Version)
 		}
 		updateWarning = " " + lipgloss.NewStyle().
-			Foreground(lipgloss.Color("0")).
-			Background(lipgloss.Color("11")).
+			Foreground(lipgloss.Color("11")).
 			Bold(true).
 			Render(warningText)
 	}
