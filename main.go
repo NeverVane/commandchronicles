@@ -237,7 +237,7 @@ Get started:
 	ensureDaemonRunning(cfg)
 
 	// Perform auto-update check in background (non-blocking)
-	// checkAutoUpdate(cfg) // Temporarily disabled to fix TUI display
+	checkAutoUpdate(cfg)
 
 	// Execute the root command
 	if err := rootCmd.Execute(); err != nil {

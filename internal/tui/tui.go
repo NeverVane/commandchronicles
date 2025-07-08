@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -28,6 +29,7 @@ import (
 	"github.com/NeverVane/commandchronicles/internal/sentry"
 	"github.com/NeverVane/commandchronicles/internal/stats"
 	"github.com/NeverVane/commandchronicles/internal/storage"
+	"github.com/NeverVane/commandchronicles/internal/updater"
 	securestorage "github.com/NeverVane/commandchronicles/pkg/storage"
 )
 
@@ -185,7 +187,10 @@ func (i CommandItem) Title() string {
 	}
 
 	// Build final command text with execution time on same line
-	commandText := i.record.Command
+	// Replace line breaks with spaces to ensure single-line display
+	commandText := strings.ReplaceAll(strings.ReplaceAll(i.record.Command, "\n", " "), "\r", " ")
+	// Clean up multiple spaces
+	commandText = strings.Join(strings.Fields(commandText), " ")
 	if len(contextParts) > 0 {
 		contextText := strings.Join(contextParts, " ")
 		commandText += " " + dirStyle.Render(fmt.Sprintf("(%s)", contextText))
@@ -409,6 +414,9 @@ type model struct {
 	totalRecords    int
 	filteredRecords int
 
+	// Update information
+	updateInfo *updater.UpdateInfo
+
 	// Filtering state
 	showSuccessOnly  bool
 	showFailuresOnly bool
@@ -526,6 +534,49 @@ func Launch(cfg *config.Config, opts *TUIOptions) error {
 	return nil
 }
 
+// getSortedAutoTagRules returns auto-tag rules as a sorted slice of [prefix, tag] pairs
+func getSortedAutoTagRules(rules map[string]string) [][]string {
+	var sortedRules [][]string
+	for prefix, tag := range rules {
+		sortedRules = append(sortedRules, []string{prefix, tag})
+	}
+
+	// Sort by prefix for consistent ordering
+	sort.Slice(sortedRules, func(i, j int) bool {
+		return sortedRules[i][0] < sortedRules[j][0]
+	})
+
+	return sortedRules
+}
+
+// checkForUpdates checks for available updates in the background
+func checkForUpdates(cfg *config.Config) *updater.UpdateInfo {
+	// Skip if disabled
+	if os.Getenv("CCR_SKIP_UPDATE_CHECK") == "true" {
+		return nil
+	}
+
+	// Create updater instance
+	updaterConfig := updater.UpdaterConfig{
+		RepoOwner: "NeverVane",
+		RepoName:  "commandchronicles",
+		Timeout:   2 * time.Second,
+	}
+	updaterInstance := updater.NewUpdater(cfg, logger.GetLogger(), "0.1.0", updaterConfig)
+
+	// Check for updates with a short timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	updateInfo, err := updaterInstance.CheckForUpdate(ctx)
+	if err != nil {
+		// Silently ignore errors to avoid disrupting TUI
+		return nil
+	}
+
+	return updateInfo
+}
+
 // newModel creates a new TUI model with bubbles components
 func newModel(session *TUISession, opts *TUIOptions) model {
 	// Initialize search input
@@ -595,6 +646,9 @@ func newModel(session *TUISession, opts *TUIOptions) model {
 	// Initialize help
 	h := help.New()
 
+	// Check for updates in background
+	updateInfo := checkForUpdates(session.config)
+
 	return model{
 		session:            session,
 		opts:               opts,
@@ -611,6 +665,7 @@ func newModel(session *TUISession, opts *TUIOptions) model {
 		extendedTimestamps: make(map[string][]int64),
 		sessionWorkingSet:  make([]*storage.CommandRecord, 0),
 		maxWorkingSetSize:  session.config.Cache.HotCacheSize * 10, // Allow 10x cache size in working set
+		updateInfo:         updateInfo,
 		searchHighlights:   make(map[string][]string),
 	}
 }
@@ -828,6 +883,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case retroactiveApplyResultMsg:
+		return m.handleRetroactiveApplyResult(msg)
+
 	case tea.MouseMsg:
 		// Handle mouse scroll events
 		if msg.Type == tea.MouseWheelUp {
@@ -924,7 +982,7 @@ func (m model) renderSearch() string {
 
 	// Create exactly two lines of help text with proper styling
 	line1 := "↑/↓: navigate • enter: copy • ctrl+j: execute • tab: details • ctrl+f: fuzzy • ctrl+n: notes"
-	line2 := "ctrl+f+n: combined search • ctrl+f+g: tag search • ctrl+s/x: filters • ctrl+g: tags • ctrl+t: stats • ?: help • ctrl+c/esc: quit"
+	line2 := "ctrl+f+n: notes search • ctrl+f+g: tag search • ctrl+s/x: filters • ctrl+g: tags • ctrl+t: stats • ?: help • ctrl+c/esc: quit"
 	helpView := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("8")).
 		MarginLeft(2).
@@ -978,6 +1036,19 @@ func (m model) renderHeader() string {
 		MarginLeft(2).
 		Render("CommandChronicles")
 
+	// Update warning (if available)
+	updateWarning := ""
+	if m.updateInfo != nil {
+		warningText := fmt.Sprintf("Update available: v%s", m.updateInfo.Version)
+		if m.updateInfo.Critical {
+			warningText = fmt.Sprintf("CRITICAL UPDATE: v%s", m.updateInfo.Version)
+		}
+		updateWarning = " " + lipgloss.NewStyle().
+			Foreground(lipgloss.Color("11")).
+			Bold(true).
+			Render(warningText)
+	}
+
 	// Total records counter (top right)
 	totalCounter := ""
 	if m.totalRecords > 0 {
@@ -986,17 +1057,18 @@ func (m model) renderHeader() string {
 			Render(fmt.Sprintf("Total: %d records", m.totalRecords))
 	}
 
-	// Create header with title left-aligned and counter right-aligned
+	// Create header with title and warning left-aligned and counter right-aligned
 	headerWidth := m.width
-	titleWidth := lipgloss.Width(title)
+	leftSide := title + updateWarning
+	leftSideWidth := lipgloss.Width(leftSide)
 	counterWidth := lipgloss.Width(totalCounter)
-	padding := headerWidth - titleWidth - counterWidth - 2
+	padding := headerWidth - leftSideWidth - counterWidth - 2
 
 	if padding < 1 {
 		padding = 1
 	}
 
-	header := title + strings.Repeat(" ", padding) + totalCounter
+	header := leftSide + strings.Repeat(" ", padding) + totalCounter
 
 	return header
 }
@@ -1567,11 +1639,18 @@ func (m model) handleTagEditKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case key.Matches(msg, key.NewBinding(key.WithKeys("esc"))):
 		// Cancel editing
-		m.mode = ModeDetails
+		if m.tagEditingRecord == nil {
+			// We were editing an auto-tag rule, return to auto-tag rules mode
+			m.mode = ModeAutoTagRules
+		} else {
+			// We were editing command tags, return to details mode
+			m.mode = ModeDetails
+		}
 		m.tagEditingRecordID = 0
 		m.tagEditingRecord = nil
 		m.tagEditOriginal = ""
 		m.tagEditError = nil
+		m.tagEditSuccess = false
 		return m, nil
 
 	default:
@@ -1585,8 +1664,8 @@ func (m model) handleTagEditKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // saveTag saves the edited tags
 func (m model) saveTag() (tea.Model, tea.Cmd) {
 	if m.tagEditingRecord == nil {
-		m.tagEditError = fmt.Errorf("no record selected")
-		return m, nil
+		// We're editing an auto-tag rule
+		return m.saveAutoTagRule()
 	}
 
 	// Parse tags from input (comma-separated)
@@ -1594,16 +1673,12 @@ func (m model) saveTag() (tea.Model, tea.Cmd) {
 	var tags []string
 	if tagInput != "" {
 		tagParts := strings.Split(tagInput, ",")
-		for _, tag := range tagParts {
-			trimmed := strings.TrimSpace(tag)
-			// Skip empty tags and tags that are only whitespace/dashes
-			if trimmed != "" && trimmed != "-" && strings.TrimSpace(strings.ReplaceAll(trimmed, "-", "")) != "" {
-				// Replace spaces with dashes for tag names
-				normalizedTag := strings.ReplaceAll(trimmed, " ", "-")
-				// Final check to avoid tags that became empty after normalization
-				if normalizedTag != "" && normalizedTag != "-" {
-					tags = append(tags, normalizedTag)
-				}
+		for _, part := range tagParts {
+			trimmed := strings.TrimSpace(part)
+			if trimmed != "" {
+				// Normalize tag: replace spaces with dashes, convert to lowercase
+				normalizedTag := strings.ToLower(strings.ReplaceAll(trimmed, " ", "-"))
+				tags = append(tags, normalizedTag)
 			}
 		}
 	}
@@ -1626,6 +1701,171 @@ func (m model) saveTag() (tea.Model, tea.Cmd) {
 	// Return to details mode
 	m.mode = ModeDetails
 	return m, nil
+}
+
+// saveAutoTagRule handles saving auto-tag rules
+func (m model) saveAutoTagRule() (tea.Model, tea.Cmd) {
+	ruleInput := strings.TrimSpace(m.noteEditor.Value())
+
+	// Parse the rule format, supporting both old and new formats
+	lines := strings.Split(ruleInput, "\n")
+	var prefix, tag string
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		// Skip comment lines
+		if strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		lowerLine := strings.ToLower(line)
+		if strings.HasPrefix(lowerLine, "prefix:") {
+			prefix = strings.TrimSpace(line[7:]) // Skip "prefix:" or "Prefix:"
+		} else if strings.HasPrefix(lowerLine, "tag:") {
+			tag = strings.TrimSpace(line[4:]) // Skip "tag:" or "Tag:"
+		}
+	}
+
+	// Normalize tag name: replace spaces with dashes, convert to lowercase
+	if tag != "" {
+		tag = strings.ToLower(strings.ReplaceAll(strings.TrimSpace(tag), " ", "-"))
+	}
+
+	// Validate input
+	if prefix == "" {
+		m.tagEditError = fmt.Errorf("prefix cannot be empty")
+		return m, nil
+	}
+	if tag == "" {
+		m.tagEditError = fmt.Errorf("tag cannot be empty")
+		return m, nil
+	}
+
+	// Initialize auto-tag rules if nil
+	if m.session.config.Tags.AutoTagRules == nil {
+		m.session.config.Tags.AutoTagRules = make(map[string]string)
+	}
+
+	// Add/update the rule
+	m.session.config.Tags.AutoTagRules[prefix] = tag
+
+	// Save config
+	configPath := filepath.Join(m.session.config.ConfigDir, "config.toml")
+	if err := m.session.config.Save(configPath); err != nil {
+		m.tagEditError = fmt.Errorf("failed to save config: %w", err)
+		return m, nil
+	}
+
+	m.tagEditSuccess = true
+	m.tagEditError = nil
+
+	// Return to auto-tag rules mode
+	m.mode = ModeAutoTagRules
+	return m, nil
+}
+
+// retroactiveApplyResultMsg represents the result of retroactive rule application
+type retroactiveApplyResultMsg struct {
+	appliedCount int
+	updatedCount int
+	err          error
+}
+
+// applyRulesRetroactively applies all auto-tag rules to all existing commands
+func (m *model) applyRulesRetroactively() (int, int, error) {
+	// Get all commands from storage
+	sessionKey := m.session.sessionKey
+	if sessionKey == nil {
+		return 0, 0, fmt.Errorf("no session key available")
+	}
+
+	// Load all commands (this might be expensive for large databases)
+	// We'll use a large batch size to get all commands
+	result, err := m.session.storage.Retrieve(&securestorage.QueryOptions{
+		Limit:  100000, // Large limit to get all commands
+		Offset: 0,
+	})
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to load commands: %w", err)
+	}
+
+	commands := result.Records
+	appliedCount := 0
+	updatedCount := 0
+
+	for _, command := range commands {
+		// Track current auto-applied tags to remove old ones
+		currentAutoTags := make(map[string]bool)
+
+		// Find what tags should be applied by current rules
+		for prefix, tagName := range m.session.config.Tags.AutoTagRules {
+			if strings.HasPrefix(command.Command, prefix) {
+				// Normalize tag name
+				normalizedTag := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(tagName), " ", "-"))
+				currentAutoTags[normalizedTag] = true
+			}
+		}
+
+		// Remove old auto-applied tags that are no longer valid
+		var newTags []string
+		for _, existingTag := range command.Tags {
+			// Keep tag if it's not an auto-applied tag or if it's still valid
+			if !m.isAutoAppliedTag(existingTag) || currentAutoTags[existingTag] {
+				newTags = append(newTags, existingTag)
+			}
+		}
+
+		// Add new auto-applied tags
+		for autoTag := range currentAutoTags {
+			hasTag := false
+			for _, tag := range newTags {
+				if tag == autoTag {
+					hasTag = true
+					break
+				}
+			}
+			if !hasTag {
+				newTags = append(newTags, autoTag)
+				appliedCount++
+			}
+		}
+
+		// Update command if tags changed
+		if len(newTags) != len(command.Tags) || !m.tagsEqual(command.Tags, newTags) {
+			command.Tags = newTags
+			if err := m.session.storage.UpdateCommand(command); err != nil {
+				// Log error but continue with other commands
+				continue
+			}
+			updatedCount++
+		}
+	}
+
+	return appliedCount, updatedCount, nil
+}
+
+// isAutoAppliedTag checks if a tag might have been auto-applied based on current rules
+func (m *model) isAutoAppliedTag(tag string) bool {
+	for _, ruleTag := range m.session.config.Tags.AutoTagRules {
+		normalizedRuleTag := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(ruleTag), " ", "-"))
+		if tag == normalizedRuleTag {
+			return true
+		}
+	}
+	return false
+}
+
+// tagsEqual checks if two tag slices are equal
+func (m *model) tagsEqual(tags1, tags2 []string) bool {
+	if len(tags1) != len(tags2) {
+		return false
+	}
+	for i, tag := range tags1 {
+		if tag != tags2[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // renderNoteEdit renders the note editing interface
@@ -1731,9 +1971,22 @@ func (m model) renderHelp() string {
 		Render("CommandChronicles - Keyboard Shortcuts")
 	content.WriteString(title + "\n\n")
 
+	// Calculate column widths based on terminal width
+	terminalWidth := m.width
+	if terminalWidth < 120 {
+		terminalWidth = 120 // Minimum width
+	}
+
+	// Calculate column width with spacing
+	spacing := 6                                     // 3 chars spacing between columns * 2 spaces
+	columnWidth := (terminalWidth - spacing - 4) / 3 // 4 for margins
+	if columnWidth < 30 {
+		columnWidth = 30 // Minimum column width
+	}
+
 	// Create three columns for better organization
 	leftColumn := lipgloss.NewStyle().
-		Width(35).
+		Width(columnWidth).
 		Render(`Navigation:
   ↑/↓        Navigate list
   mouse      Scroll wheel
@@ -1766,7 +2019,7 @@ Tags:
   esc        Cancel`)
 
 	middleColumn := lipgloss.NewStyle().
-		Width(35).
+		Width(columnWidth).
 		Render(`Search:
   [type]     Search anything
   ctrl+f     Toggle fuzzy
@@ -1794,7 +2047,7 @@ Time Search:
   1h-30m     Between times`)
 
 	rightColumn := lipgloss.NewStyle().
-		Width(35).
+		Width(columnWidth).
 		Render(`Deletion:
   del/ctrl+d Delete record
   ctrl+w     Wipe all history
@@ -2111,33 +2364,100 @@ func (m model) renderColorPicker() string {
 
 // handleAutoTagRulesKeys handles key events in auto-tag rules mode
 func (m model) handleAutoTagRulesKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	sortedRules := getSortedAutoTagRules(m.session.config.Tags.AutoTagRules)
+	ruleCount := len(sortedRules)
+
 	switch {
 	case key.Matches(msg, key.NewBinding(key.WithKeys("up"))):
-		if m.autoTagRulesSelected > 0 {
+		if ruleCount > 0 && m.autoTagRulesSelected > 0 {
 			m.autoTagRulesSelected--
 		}
 
 	case key.Matches(msg, key.NewBinding(key.WithKeys("down"))):
-		ruleCount := len(m.session.config.Tags.AutoTagRules)
-		if m.autoTagRulesSelected < ruleCount-1 {
+		if ruleCount > 0 && m.autoTagRulesSelected < ruleCount-1 {
 			m.autoTagRulesSelected++
 		}
 
 	case key.Matches(msg, key.NewBinding(key.WithKeys("enter"))):
-		// TODO: Edit selected rule
+		// Edit selected rule
+		if ruleCount > 0 && m.autoTagRulesSelected < ruleCount {
+			selectedRule := sortedRules[m.autoTagRulesSelected]
+			prefix := selectedRule[0]
+			tag := selectedRule[1]
+
+			// Initialize note editor for rule editing
+			m.noteEditor.SetValue(fmt.Sprintf("prefix: %s\ntag: %s", prefix, tag))
+			m.noteEditor.Focus()
+
+			// Store the original rule for reference
+			m.tagEditOriginal = fmt.Sprintf("%s → %s", prefix, tag)
+
+			// Enter a simple editing mode (reuse tag edit mode)
+			m.mode = ModeTagEdit
+			m.tagEditSuccess = false
+			m.tagEditError = nil
+		}
 		return m, nil
 
 	case key.Matches(msg, key.NewBinding(key.WithKeys("d", "delete"))):
-		// TODO: Delete selected rule
+		// Delete selected rule using sorted order
+		if ruleCount > 0 && m.autoTagRulesSelected < ruleCount {
+			selectedRule := sortedRules[m.autoTagRulesSelected]
+			prefixToDelete := selectedRule[0]
+
+			// Initialize the map if it's nil
+			if m.session.config.Tags.AutoTagRules == nil {
+				m.session.config.Tags.AutoTagRules = make(map[string]string)
+			}
+
+			delete(m.session.config.Tags.AutoTagRules, prefixToDelete)
+
+			// Save config - use config file path from session
+			configPath := filepath.Join(m.session.config.ConfigDir, "config.toml")
+			if err := m.session.config.Save(configPath); err != nil {
+				m.autoTagRulesError = fmt.Errorf("failed to save config: %w", err)
+			} else {
+				// Adjust selection if needed
+				newCount := len(m.session.config.Tags.AutoTagRules)
+				if m.autoTagRulesSelected >= newCount && m.autoTagRulesSelected > 0 {
+					m.autoTagRulesSelected--
+				}
+				m.autoTagRulesError = fmt.Errorf("rule deleted successfully")
+				// Clear success message after 2 seconds
+				go func() {
+					time.Sleep(2 * time.Second)
+					m.autoTagRulesError = nil
+				}()
+			}
+		}
 		return m, nil
 
 	case key.Matches(msg, key.NewBinding(key.WithKeys("n"))):
-		// TODO: Add new rule
+		// Add new rule
+		m.noteEditor.SetValue("# Create new auto-tag rule\n# Commands starting with the prefix will be tagged automatically\n\nprefix: \ntag: ")
+		m.noteEditor.Focus()
+		m.tagEditOriginal = ""
+		m.mode = ModeTagEdit
+		m.tagEditSuccess = false
+		m.tagEditError = nil
 		return m, nil
 
 	case key.Matches(msg, key.NewBinding(key.WithKeys("r"))):
-		// TODO: Apply rules retroactively
-		return m, nil
+		// Apply rules retroactively to all commands
+		if len(m.session.config.Tags.AutoTagRules) == 0 {
+			m.autoTagRulesError = fmt.Errorf("no rules to apply")
+			return m, nil
+		}
+
+		m.autoTagRulesError = fmt.Errorf("applying rules to all commands...")
+		return m, tea.Cmd(func() tea.Msg {
+			appliedCount, updatedCount, err := m.applyRulesRetroactively()
+			return retroactiveApplyResultMsg{
+				appliedCount: appliedCount,
+				updatedCount: updatedCount,
+				err:          err,
+			}
+		})
 
 	case key.Matches(msg, key.NewBinding(key.WithKeys("esc"))):
 		// Return to search mode
@@ -2147,6 +2467,21 @@ func (m model) handleAutoTagRulesKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	return m, nil
+}
+
+// handleRetroactiveApplyResult handles the result of retroactive rule application
+func (m model) handleRetroactiveApplyResult(msg retroactiveApplyResultMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		m.autoTagRulesError = fmt.Errorf("failed to apply rules: %v", msg.err)
+	} else {
+		m.autoTagRulesError = fmt.Errorf("applied %d tags to %d commands", msg.appliedCount, msg.updatedCount)
+		// Clear success message after 3 seconds
+		go func() {
+			time.Sleep(3 * time.Second)
+			m.autoTagRulesError = nil
+		}()
+	}
 	return m, nil
 }
 
@@ -2181,23 +2516,33 @@ func (m model) renderAutoTagRules() string {
 		Render("Rules:")
 	content.WriteString(rulesTitle + "\n")
 
-	if len(m.session.config.Tags.AutoTagRules) == 0 {
+	sortedRules := getSortedAutoTagRules(m.session.config.Tags.AutoTagRules)
+	if len(sortedRules) == 0 {
 		noRulesMsg := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("8")).
 			MarginLeft(4).
 			Render("No auto-tagging rules configured")
 		content.WriteString(noRulesMsg + "\n")
 	} else {
-		ruleIndex := 0
-		for prefix, tag := range m.session.config.Tags.AutoTagRules {
+		// Ensure selection is within bounds
+		ruleCount := len(sortedRules)
+		if m.autoTagRulesSelected >= ruleCount {
+			m.autoTagRulesSelected = ruleCount - 1
+		}
+		if m.autoTagRulesSelected < 0 {
+			m.autoTagRulesSelected = 0
+		}
+
+		for ruleIndex, rule := range sortedRules {
 			cursor := "  "
 			if ruleIndex == m.autoTagRulesSelected {
 				cursor = "→ "
 			}
 
+			prefix := rule[0]
+			tag := rule[1]
 			ruleText := fmt.Sprintf("%s%s → #%s", cursor, prefix, tag)
 			content.WriteString(ruleText + "\n")
-			ruleIndex++
 		}
 	}
 
@@ -2206,24 +2551,105 @@ func (m model) renderAutoTagRules() string {
 	instructionsStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("8")).
 		MarginLeft(2)
-	content.WriteString(instructionsStyle.Render("↑/↓: navigate • enter: edit • d: delete • n: new rule • r: apply retroactively • esc: back") + "\n\n")
+	content.WriteString(instructionsStyle.Render("↑/↓: navigate • enter: edit • d: delete • n: new rule • r: apply to all commands • esc: back") + "\n\n")
 
-	// Error message
+	// Success/Error message
 	if m.autoTagRulesError != nil {
-		errorMsg := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("9")).
-			MarginLeft(2).
-			Render(fmt.Sprintf("✗ Error: %s", m.autoTagRulesError.Error()))
-		content.WriteString(errorMsg + "\n")
+		errorText := m.autoTagRulesError.Error()
+		if strings.Contains(errorText, "applying rules") {
+			// Show as info message
+			infoMsg := lipgloss.NewStyle().
+				Foreground(lipgloss.Color("11")).
+				MarginLeft(2).
+				Render(fmt.Sprintf("ℹ %s", errorText))
+			content.WriteString(infoMsg + "\n")
+		} else if strings.Contains(errorText, "applied") && strings.Contains(errorText, "commands") {
+			// Show as success message
+			successMsg := lipgloss.NewStyle().
+				Foreground(lipgloss.Color("10")).
+				MarginLeft(2).
+				Render(fmt.Sprintf("✓ %s", errorText))
+			content.WriteString(successMsg + "\n")
+		} else if strings.Contains(errorText, "deleted successfully") {
+			// Show as success message
+			successMsg := lipgloss.NewStyle().
+				Foreground(lipgloss.Color("10")).
+				MarginLeft(2).
+				Render(fmt.Sprintf("✓ %s", errorText))
+			content.WriteString(successMsg + "\n")
+		} else {
+			// Show as error message
+			errorMsg := lipgloss.NewStyle().
+				Foreground(lipgloss.Color("9")).
+				MarginLeft(2).
+				Render(fmt.Sprintf("✗ %s", errorText))
+			content.WriteString(errorMsg + "\n")
+		}
 	}
 
 	return content.String()
 }
 
 func (m model) renderTagEdit() string {
+	// Check if we're editing an auto-tag rule or a command's tags
 	if m.tagEditingRecord == nil {
-		return "No command selected for tag editing"
+		// We're editing an auto-tag rule
+		var content strings.Builder
+
+		// Title
+		title := lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("12")).
+			MarginLeft(2).
+			Render("Edit Auto-Tag Rule")
+		content.WriteString(title + "\n\n")
+
+		// Instructions
+		instructionsText := "Enter rule details in the format:\nprefix: <command prefix>\ntag: <tag name>\n\nExample:\nprefix: docker\ntag: containers"
+		if m.tagEditOriginal != "" {
+			instructionsText = fmt.Sprintf("Editing rule: %s\n\n%s", m.tagEditOriginal, instructionsText)
+		}
+
+		instructionsStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("11")).
+			MarginLeft(2)
+		content.WriteString(instructionsStyle.Render(instructionsText) + "\n\n")
+
+		// Editor
+		editorStyle := lipgloss.NewStyle().
+			MarginLeft(2).
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("6")).
+			Padding(0, 1)
+		content.WriteString(editorStyle.Render(m.noteEditor.View()) + "\n\n")
+
+		// Instructions
+		instructionsStyle2 := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("8")).
+			MarginLeft(2)
+		content.WriteString(instructionsStyle2.Render("ctrl+s: save • esc: cancel") + "\n\n")
+
+		// Success/error messages
+		if m.tagEditSuccess {
+			successMsg := lipgloss.NewStyle().
+				Foreground(lipgloss.Color("10")).
+				MarginLeft(2).
+				Render("✓ Rule saved successfully!")
+			content.WriteString(successMsg + "\n")
+		}
+
+		if m.tagEditError != nil {
+			errorMsg := lipgloss.NewStyle().
+				Foreground(lipgloss.Color("9")).
+				MarginLeft(2).
+				Render(fmt.Sprintf("✗ Error: %s", m.tagEditError.Error()))
+			content.WriteString(errorMsg + "\n")
+		}
+
+		return content.String()
 	}
+
+	// Original command tag editing logic</text>
 
 	var content strings.Builder
 
@@ -2269,7 +2695,7 @@ func (m model) renderTagEdit() string {
 	instructionsStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("8")).
 		MarginLeft(2)
-	content.WriteString(instructionsStyle.Render("ctrl+s: save • esc: cancel") + "\n\n")
+	content.WriteString(instructionsStyle.Render("ctrl+s: save • ctrl+t: color picker • esc: cancel") + "\n\n")
 
 	// Success/error messages
 	if m.tagEditSuccess {
