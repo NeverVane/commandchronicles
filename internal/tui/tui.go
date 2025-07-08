@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -454,8 +455,9 @@ type model struct {
 	extendedTimestamps        map[string][]int64     // fullCommand -> timestamps
 
 	// Session working set to maintain loaded records
-	sessionWorkingSet []*storage.CommandRecord
-	maxWorkingSetSize int
+	sessionWorkingSet   []*storage.CommandRecord
+	maxWorkingSetSize   int
+	sessionWorkingSetMu sync.RWMutex
 
 	// Note editing state
 	noteEditingRecordID int64
@@ -1596,12 +1598,14 @@ func (m model) saveNote() (tea.Model, tea.Cmd) {
 	m.noteEditingRecord.Note = newNote
 
 	// Update the record in the session working set
+	m.sessionWorkingSetMu.Lock()
 	for i, record := range m.sessionWorkingSet {
 		if record.ID == m.noteEditingRecordID {
 			m.sessionWorkingSet[i].Note = newNote
 			break
 		}
 	}
+	m.sessionWorkingSetMu.Unlock()
 
 	// Update the list item
 	for i, item := range m.list.Items() {
@@ -3636,36 +3640,61 @@ func (m model) performSearch() tea.Cmd {
 		var req *search.SearchRequest
 		if effectiveQuery == "" && !timeFilter.HasTimeFilter {
 			// For empty query, use session working set if available, otherwise fetch from cache
-			if len(m.sessionWorkingSet) > 0 {
+			m.sessionWorkingSetMu.RLock()
+			workingSetSize := len(m.sessionWorkingSet)
+			var workingSetCopy []*storage.CommandRecord
+			if workingSetSize > 0 {
+				// Create a safe copy to prevent corruption from background processes
+				workingSetCopy = make([]*storage.CommandRecord, len(m.sessionWorkingSet))
+				copy(workingSetCopy, m.sessionWorkingSet)
+			}
+			m.sessionWorkingSetMu.RUnlock()
+
+			if workingSetSize > 0 {
 				m.session.logger.Debug().
-					Int("working_set_size", len(m.sessionWorkingSet)).
+					Int("working_set_size", workingSetSize).
 					Msg("Using session working set for empty query")
 
-				// Filter working set records
-				filteredResults := m.sessionWorkingSet
-				if m.showSuccessOnly {
-					var filtered []*storage.CommandRecord
-					for _, record := range m.sessionWorkingSet {
-						if record.ExitCode == 0 {
-							filtered = append(filtered, record)
-						}
+				// Filter working set records - validate records first
+				var validRecords []*storage.CommandRecord
+				for _, record := range workingSetCopy {
+					if m.isValidRecord(record) {
+						validRecords = append(validRecords, record)
 					}
-					filteredResults = filtered
-				} else if m.showFailuresOnly {
-					var filtered []*storage.CommandRecord
-					for _, record := range m.sessionWorkingSet {
-						if record.ExitCode != 0 {
-							filtered = append(filtered, record)
-						}
-					}
-					filteredResults = filtered
 				}
 
-				return searchResultMsg{
-					results:         filteredResults,
-					totalCount:      int64(len(filteredResults)),
-					searchStartTime: &searchStartTime,
-					timeFilter:      timeFilter,
+				if len(validRecords) == 0 {
+					m.session.logger.Warn().
+						Int("original_count", len(workingSetCopy)).
+						Msg("All records in working set are corrupted, clearing and falling back to fresh search")
+					m.clearSessionWorkingSet("corrupted records detected")
+					// Fall through to database search
+				} else {
+					filteredResults := validRecords
+					if m.showSuccessOnly {
+						var filtered []*storage.CommandRecord
+						for _, record := range validRecords {
+							if record.ExitCode == 0 {
+								filtered = append(filtered, record)
+							}
+						}
+						filteredResults = filtered
+					} else if m.showFailuresOnly {
+						var filtered []*storage.CommandRecord
+						for _, record := range validRecords {
+							if record.ExitCode != 0 {
+								filtered = append(filtered, record)
+							}
+						}
+						filteredResults = filtered
+					}
+
+					return searchResultMsg{
+						results:         filteredResults,
+						totalCount:      int64(len(filteredResults)),
+						searchStartTime: &searchStartTime,
+						timeFilter:      timeFilter,
+					}
 				}
 			}
 
@@ -3680,8 +3709,12 @@ func (m model) performSearch() tea.Cmd {
 			m.session.logger.Debug().Msg("Using empty query to fetch recent commands")
 		} else {
 			// Use larger limit when we have a working set to search beyond current records
-			if len(m.sessionWorkingSet) > 0 {
-				searchLimit = max(searchLimit*3, len(m.sessionWorkingSet)+50) // Search beyond working set
+			m.sessionWorkingSetMu.RLock()
+			workingSetSize := len(m.sessionWorkingSet)
+			m.sessionWorkingSetMu.RUnlock()
+
+			if workingSetSize > 0 {
+				searchLimit = max(searchLimit*3, workingSetSize+50) // Search beyond working set
 			}
 
 			req = &search.SearchRequest{
@@ -4115,6 +4148,9 @@ func (m *model) updateSessionWorkingSet(newRecords []*storage.CommandRecord) {
 		return
 	}
 
+	m.sessionWorkingSetMu.Lock()
+	defer m.sessionWorkingSetMu.Unlock()
+
 	initialSize := len(m.sessionWorkingSet)
 
 	m.session.logger.Debug().
@@ -4126,20 +4162,37 @@ func (m *model) updateSessionWorkingSet(newRecords []*storage.CommandRecord) {
 	// Create a map to track existing records by ID to avoid duplicates
 	existingIDs := make(map[int64]bool)
 	for _, record := range m.sessionWorkingSet {
-		existingIDs[record.ID] = true
+		if m.isValidRecord(record) {
+			existingIDs[record.ID] = true
+		}
 	}
+
+	// Filter out corrupted records from existing working set
+	var validExistingRecords []*storage.CommandRecord
+	for _, record := range m.sessionWorkingSet {
+		if m.isValidRecord(record) {
+			validExistingRecords = append(validExistingRecords, record)
+		}
+	}
+	m.sessionWorkingSet = validExistingRecords
 
 	// Add new records that aren't already in the working set
 	addedCount := 0
 	duplicateCount := 0
 	for _, record := range newRecords {
-		if !existingIDs[record.ID] {
-			m.sessionWorkingSet = append(m.sessionWorkingSet, record)
+		if m.isValidRecord(record) && !existingIDs[record.ID] {
+			// Create a deep copy to prevent corruption from shared references
+			recordCopy := m.deepCopyRecord(record)
+			m.sessionWorkingSet = append(m.sessionWorkingSet, recordCopy)
 			addedCount++
 			m.session.logger.Debug().
 				Int64("record_id", record.ID).
 				Str("command", record.Command).
 				Msg("Added new record to working set")
+		} else if !m.isValidRecord(record) {
+			m.session.logger.Warn().
+				Int64("record_id", record.ID).
+				Msg("Skipped corrupted record in working set update")
 		} else {
 			duplicateCount++
 			m.session.logger.Debug().
@@ -4172,6 +4225,9 @@ func (m *model) updateSessionWorkingSet(newRecords []*storage.CommandRecord) {
 
 // clearSessionWorkingSet clears the session working set with logging
 func (m *model) clearSessionWorkingSet(reason string) {
+	m.sessionWorkingSetMu.Lock()
+	defer m.sessionWorkingSetMu.Unlock()
+
 	oldSize := len(m.sessionWorkingSet)
 	m.sessionWorkingSet = make([]*storage.CommandRecord, 0)
 
@@ -4179,6 +4235,90 @@ func (m *model) clearSessionWorkingSet(reason string) {
 		Int("previous_size", oldSize).
 		Str("reason", reason).
 		Msg("Cleared session working set")
+}
+
+// isValidRecord checks if a record is valid and not corrupted
+func (m *model) isValidRecord(record *storage.CommandRecord) bool {
+	if record == nil {
+		return false
+	}
+
+	// Check for corrupted timestamp (the main symptom of the bug)
+	if record.Timestamp <= 0 || record.Timestamp > time.Now().UnixMilli() {
+		return false
+	}
+
+	// Check for other signs of corruption
+	if record.Command == "" && record.Note == "" && len(record.Tags) == 0 {
+		return false
+	}
+
+	// Check for reasonable timestamp (not too far in the past)
+	// Anything older than 10 years is suspicious
+	tenYearsAgo := time.Now().AddDate(-10, 0, 0).UnixMilli()
+	if record.Timestamp < tenYearsAgo {
+		return false
+	}
+
+	return true
+}
+
+// deepCopyRecord creates a deep copy of a command record to prevent shared memory corruption
+func (m *model) deepCopyRecord(record *storage.CommandRecord) *storage.CommandRecord {
+	if record == nil {
+		return nil
+	}
+
+	// Create new record with copied values
+	newRecord := &storage.CommandRecord{
+		ID:         record.ID,
+		Command:    record.Command,
+		ExitCode:   record.ExitCode,
+		Duration:   record.Duration,
+		Note:       record.Note,
+		WorkingDir: record.WorkingDir,
+		Timestamp:  record.Timestamp,
+		SessionID:  record.SessionID,
+		Hostname:   record.Hostname,
+		GitRoot:    record.GitRoot,
+		GitBranch:  record.GitBranch,
+		GitCommit:  record.GitCommit,
+		User:       record.User,
+		Shell:      record.Shell,
+		TTY:        record.TTY,
+		Version:    record.Version,
+		CreatedAt:  record.CreatedAt,
+		DeviceID:   record.DeviceID,
+		RecordHash: record.RecordHash,
+		SyncStatus: record.SyncStatus,
+	}
+
+	// Deep copy slices and maps
+	if record.Tags != nil {
+		newRecord.Tags = make([]string, len(record.Tags))
+		copy(newRecord.Tags, record.Tags)
+	}
+
+	if record.TagColors != nil {
+		newRecord.TagColors = make(map[string]string)
+		for k, v := range record.TagColors {
+			newRecord.TagColors[k] = v
+		}
+	}
+
+	if record.Environment != nil {
+		newRecord.Environment = make(map[string]string)
+		for k, v := range record.Environment {
+			newRecord.Environment[k] = v
+		}
+	}
+
+	if record.LastSynced != nil {
+		lastSynced := *record.LastSynced
+		newRecord.LastSynced = &lastSynced
+	}
+
+	return newRecord
 }
 
 // Message types
