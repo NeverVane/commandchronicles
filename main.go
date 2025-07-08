@@ -4045,6 +4045,13 @@ func checkAutoUpdate(cfg *config.Config) {
 		return
 	}
 
+	// Skip update warning if TUI is being launched (it has its own update display)
+	for _, arg := range os.Args {
+		if arg == "tui" || arg == "--tui" {
+			return
+		}
+	}
+
 	// Only check periodically (not on every command)
 	// This is a simple implementation - in production you'd want to track last check time
 	go func() {
@@ -4086,8 +4093,8 @@ func checkAutoUpdate(cfg *config.Config) {
 			formatter.SetFlags(false, false, false) // Default settings for background notification
 
 			if updateInfo.Critical {
-				formatter.Warning("CRITICAL UPDATE AVAILABLE: v%s", updateInfo.Version)
-				formatter.Warning("   Security fix - Run 'ccr update' immediately")
+				formatter.Warning("IMPORTANT UPDATE AVAILABLE: v%s", updateInfo.Version)
+				//formatter.Warning("Security fix - Run 'ccr update' immediately")
 				fmt.Fprintf(os.Stderr, "\n")
 			} else {
 				formatter.Info("Update available: v%s - Run 'ccr update' to upgrade", updateInfo.Version)

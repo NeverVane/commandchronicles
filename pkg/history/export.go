@@ -18,11 +18,11 @@ import (
 type ExportFormat string
 
 const (
-	FormatJSON    ExportFormat = "json"
-	FormatBash    ExportFormat = "bash"
-	FormatZsh     ExportFormat = "zsh"
-	FormatCSV     ExportFormat = "csv"
-	FormatPlain   ExportFormat = "plain"
+	FormatJSON  ExportFormat = "json"
+	FormatBash  ExportFormat = "bash"
+	FormatZsh   ExportFormat = "zsh"
+	FormatCSV   ExportFormat = "csv"
+	FormatPlain ExportFormat = "plain"
 )
 
 // ExportResult contains the result of an export operation
@@ -36,19 +36,22 @@ type ExportResult struct {
 
 // JSONExportRecord represents a command record in JSON export format
 type JSONExportRecord struct {
-	Command    string            `json:"command"`
-	ExitCode   int               `json:"exit_code"`
-	Duration   int64             `json:"duration_ms"`
-	WorkingDir string            `json:"working_dir"`
-	Timestamp  time.Time         `json:"timestamp"`
-	SessionID  string            `json:"session_id"`
-	Hostname   string            `json:"hostname"`
-	User       string            `json:"user"`
-	Shell      string            `json:"shell"`
-	GitRoot    string            `json:"git_root,omitempty"`
-	GitBranch  string            `json:"git_branch,omitempty"`
-	GitCommit  string            `json:"git_commit,omitempty"`
-	TTY        string            `json:"tty,omitempty"`
+	Command     string            `json:"command"`
+	ExitCode    int               `json:"exit_code"`
+	Duration    int64             `json:"duration_ms"`
+	Note        string            `json:"note,omitempty"`
+	Tags        []string          `json:"tags,omitempty"`
+	TagColors   map[string]string `json:"tag_colors,omitempty"`
+	WorkingDir  string            `json:"working_dir"`
+	Timestamp   time.Time         `json:"timestamp"`
+	SessionID   string            `json:"session_id"`
+	Hostname    string            `json:"hostname"`
+	User        string            `json:"user"`
+	Shell       string            `json:"shell"`
+	GitRoot     string            `json:"git_root,omitempty"`
+	GitBranch   string            `json:"git_branch,omitempty"`
+	GitCommit   string            `json:"git_commit,omitempty"`
+	TTY         string            `json:"tty,omitempty"`
 	Environment map[string]string `json:"environment,omitempty"`
 }
 
@@ -78,7 +81,7 @@ func ExportHistory(store *secureStorage.SecureStorage, format ExportFormat, outp
 	// Create output file or use stdout
 	var writer io.Writer
 	var file *os.File
-	
+
 	if outputPath == "" || outputPath == "-" {
 		writer = os.Stdout
 		outputPath = "stdout"
@@ -138,6 +141,9 @@ func exportToJSON(writer io.Writer, records []*storage.CommandRecord) (int64, er
 			Command:     record.Command,
 			ExitCode:    record.ExitCode,
 			Duration:    record.Duration,
+			Note:        record.Note,
+			Tags:        record.Tags,
+			TagColors:   record.TagColors,
 			WorkingDir:  record.WorkingDir,
 			Timestamp:   time.UnixMilli(record.Timestamp),
 			SessionID:   record.SessionID,
@@ -155,7 +161,7 @@ func exportToJSON(writer io.Writer, records []*storage.CommandRecord) (int64, er
 
 	encoder := json.NewEncoder(writer)
 	encoder.SetIndent("", "  ")
-	
+
 	if err := encoder.Encode(jsonRecords); err != nil {
 		return 0, err
 	}
@@ -204,7 +210,7 @@ func exportToZsh(writer io.Writer, records []*storage.CommandRecord) (int64, err
 	for _, record := range records {
 		timestamp := time.UnixMilli(record.Timestamp).Unix()
 		duration := record.Duration / 1000 // Convert milliseconds to seconds
-		
+
 		// Zsh format: : timestamp:duration;command
 		line := fmt.Sprintf(": %d:%d;%s\n", timestamp, duration, record.Command)
 		n, err := bufWriter.WriteString(line)
@@ -217,8 +223,6 @@ func exportToZsh(writer io.Writer, records []*storage.CommandRecord) (int64, err
 	return bytesWritten, nil
 }
 
-
-
 // exportToCSV exports records to CSV format
 func exportToCSV(writer io.Writer, records []*storage.CommandRecord) (int64, error) {
 	bufWriter := bufio.NewWriter(writer)
@@ -227,7 +231,7 @@ func exportToCSV(writer io.Writer, records []*storage.CommandRecord) (int64, err
 	var bytesWritten int64
 
 	// Write CSV header
-	header := "timestamp,command,exit_code,duration_ms,working_dir,session_id,hostname,user,shell\n"
+	header := "timestamp,command,exit_code,duration_ms,note,tags,working_dir,session_id,hostname,user,shell\n"
 	n, err := bufWriter.WriteString(header)
 	if err != nil {
 		return bytesWritten, err
@@ -236,23 +240,27 @@ func exportToCSV(writer io.Writer, records []*storage.CommandRecord) (int64, err
 
 	for _, record := range records {
 		timestamp := time.UnixMilli(record.Timestamp).Format(time.RFC3339)
-		
+
 		// Escape CSV fields
 		command := escapeCSVField(record.Command)
+		note := escapeCSVField(record.Note)
+		tags := escapeCSVField(strings.Join(record.Tags, ";"))
 		workingDir := escapeCSVField(record.WorkingDir)
-		
-		line := fmt.Sprintf("%s,%s,%d,%d,%s,%s,%s,%s,%s\n",
+
+		line := fmt.Sprintf("%s,%s,%d,%d,%s,%s,%s,%s,%s,%s,%s\n",
 			timestamp,
 			command,
 			record.ExitCode,
 			record.Duration,
+			note,
+			tags,
 			workingDir,
 			record.SessionID,
 			record.Hostname,
 			record.User,
 			record.Shell,
 		)
-		
+
 		n, err := bufWriter.WriteString(line)
 		if err != nil {
 			return bytesWritten, err
@@ -272,13 +280,33 @@ func exportToPlain(writer io.Writer, records []*storage.CommandRecord) (int64, e
 
 	for _, record := range records {
 		timestamp := time.UnixMilli(record.Timestamp).Format("2006-01-02 15:04:05")
-		line := fmt.Sprintf("[%s] %s\n", timestamp, record.Command)
-		
+
+		// Build the main command line
+		line := fmt.Sprintf("[%s] %s", timestamp, record.Command)
+
+		// Add tags if present
+		if len(record.Tags) > 0 {
+			for _, tag := range record.Tags {
+				line += fmt.Sprintf(" #%s", tag)
+			}
+		}
+		line += "\n"
+
 		n, err := bufWriter.WriteString(line)
 		if err != nil {
 			return bytesWritten, err
 		}
 		bytesWritten += int64(n)
+
+		// Add note if present
+		if record.Note != "" {
+			noteLine := fmt.Sprintf("    Note: %s\n", record.Note)
+			n, err := bufWriter.WriteString(noteLine)
+			if err != nil {
+				return bytesWritten, err
+			}
+			bytesWritten += int64(n)
+		}
 	}
 
 	return bytesWritten, nil
@@ -308,13 +336,13 @@ func GetSupportedFormats() []ExportFormat {
 // ValidateExportFormat checks if the given format is supported
 func ValidateExportFormat(format string) (ExportFormat, error) {
 	f := ExportFormat(strings.ToLower(format))
-	
+
 	for _, supported := range GetSupportedFormats() {
 		if f == supported {
 			return f, nil
 		}
 	}
-	
+
 	return "", fmt.Errorf("unsupported export format: %s. Supported formats: %v", format, GetSupportedFormats())
 }
 
@@ -322,10 +350,10 @@ func ValidateExportFormat(format string) (ExportFormat, error) {
 func GenerateDefaultOutputPath(format ExportFormat, outputDir string) string {
 	timestamp := time.Now().Format("20060102_150405")
 	filename := fmt.Sprintf("commandchronicles_export_%s.%s", timestamp, string(format))
-	
+
 	if outputDir == "" {
 		outputDir = "."
 	}
-	
+
 	return filepath.Join(outputDir, filename)
 }

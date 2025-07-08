@@ -1039,12 +1039,13 @@ func (m model) renderHeader() string {
 	// Update warning (if available)
 	updateWarning := ""
 	if m.updateInfo != nil {
-		warningText := fmt.Sprintf("Update available: v%s", m.updateInfo.Version)
+		warningText := fmt.Sprintf("*** UPDATE AVAILABLE: v%s ***", m.updateInfo.Version)
 		if m.updateInfo.Critical {
-			warningText = fmt.Sprintf("CRITICAL UPDATE: v%s", m.updateInfo.Version)
+			warningText = fmt.Sprintf("*** CRITICAL UPDATE: v%s ***", m.updateInfo.Version)
 		}
 		updateWarning = " " + lipgloss.NewStyle().
-			Foreground(lipgloss.Color("11")).
+			Foreground(lipgloss.Color("0")).
+			Background(lipgloss.Color("11")).
 			Bold(true).
 			Render(warningText)
 	}
