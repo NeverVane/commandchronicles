@@ -2,7 +2,7 @@
 
 ```
 ===================================================================
-                CommandChronicles CLI (ccr) v0.3.0
+                CommandChronicles CLI (ccr) v0.3.1
 ===================================================================
 
   🚀 A modern shell history management tool that supercharges
@@ -14,7 +14,7 @@
 
 <p align="center">
   <a href="https://github.com/NeverVane/commandchronicles/releases">
-    <img src="https://img.shields.io/badge/version-0.3.0-blue.svg" alt="Version">
+    <img src="https://img.shields.io/badge/version-0.3.1-blue.svg" alt="Version">
   </a>
   <a href="LICENSE">
     <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License">

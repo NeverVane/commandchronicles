@@ -41,9 +41,9 @@ import (
 )
 
 var (
-	version = "0.3.0"
+	version = "0.3.1"
 	commit  = "release"
-	date    = "2025-06-26"
+	date    = "2025-07-09"
 	author  = "Leonardo Zanobi"
 	website = "https://commandchronicles.dev"
 )
@@ -771,6 +771,7 @@ Use without arguments to search all commands. Use --tui flag to open interactive
 					InitialQuery: initialQuery,
 					FuzzyEnabled: fuzzyEnabled,
 					MaxResults:   maxResults,
+					Version:      version,
 				}
 
 				// Launch TUI with proper initialization
@@ -2365,6 +2366,7 @@ This is the same interface activated by pressing the up arrow key in the shell.`
 				InitialQuery: initialQuery,
 				FuzzyEnabled: fuzzyEnabled,
 				MaxResults:   maxResults,
+				Version:      version,
 			}
 
 			// Launch TUI with proper initialization

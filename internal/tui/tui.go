@@ -39,6 +39,7 @@ type TUIOptions struct {
 	InitialQuery string
 	FuzzyEnabled bool
 	MaxResults   int
+	Version      string
 }
 
 // TUI modes for different interaction states
@@ -510,7 +511,13 @@ func Launch(cfg *config.Config, opts *TUIOptions) error {
 		opts = &TUIOptions{
 			FuzzyEnabled: true,
 			MaxResults:   cfg.Cache.HotCacheSize,
+			Version:      "unknown", // Fallback version
 		}
+	}
+
+	// Set default version if not provided
+	if opts.Version == "" {
+		opts.Version = "unknown"
 	}
 
 	log := logger.GetLogger().WithComponent("tui")
@@ -552,7 +559,7 @@ func getSortedAutoTagRules(rules map[string]string) [][]string {
 }
 
 // checkForUpdates checks for available updates in the background
-func checkForUpdates(cfg *config.Config) *updater.UpdateInfo {
+func checkForUpdates(cfg *config.Config, currentVersion string) *updater.UpdateInfo {
 	// Skip if disabled
 	if os.Getenv("CCR_SKIP_UPDATE_CHECK") == "true" {
 		return nil
@@ -564,7 +571,7 @@ func checkForUpdates(cfg *config.Config) *updater.UpdateInfo {
 		RepoName:  "commandchronicles",
 		Timeout:   2 * time.Second,
 	}
-	updaterInstance := updater.NewUpdater(cfg, logger.GetLogger(), "0.1.0", updaterConfig)
+	updaterInstance := updater.NewUpdater(cfg, logger.GetLogger(), currentVersion, updaterConfig)
 
 	// Check for updates with a short timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -649,7 +656,7 @@ func newModel(session *TUISession, opts *TUIOptions) model {
 	h := help.New()
 
 	// Check for updates in background
-	updateInfo := checkForUpdates(session.config)
+	updateInfo := checkForUpdates(session.config, opts.Version)
 
 	return model{
 		session:            session,
