@@ -38,6 +38,12 @@
 - ⚡ **Smart caching system** for instant search results
 - 📈 **Beautiful command statistics** and usage analytics
 
+## 🖼️ TUI vs Traditional History
+
+![History Comparison](docs/images/screenshots/historyComparison.png)
+
+*Transform your command line experience: From basic history to intelligent, searchable command management*
+
 ## 🚀 Quick Start
 
 ### Installation
@@ -138,6 +144,10 @@ ccr search --since 2d --until 1d "test"
 
 CommandChronicles includes a comprehensive note system for annotating your commands with context, explanations, and reminders.
 
+![Note System](docs/images/features/noteSystem.png)
+
+*Add rich, multi-line notes to your commands with the integrated note editor*
+
 ```bash
 # Add a note to a command (use command ID from search results)
 ccr note add 123 "This command deploys to production"
@@ -177,6 +187,10 @@ ccr note delete 123
 ### Tag System
 
 CommandChronicles includes a comprehensive tag system for categorizing and organizing your commands with visual indicators and powerful search capabilities.
+
+![Tag System](docs/images/features/tagSystem.png)
+
+*Organize and categorize your commands with color-coded tags for better workflow management*
 
 ```bash
 # Add a tag to a command (use command ID from search results)
