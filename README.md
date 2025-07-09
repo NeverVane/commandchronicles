@@ -31,6 +31,7 @@
 - 🔐 **Military-grade encryption** (XChaCha20-Poly1305) for your command history
 - 🔍 **Blazing-fast fuzzy search** with real-time interactive TUI (Ctrl+R)
 - 📝 **Rich note system** for annotating commands with context and explanations
+- 🏷️ **Comprehensive tag system** for categorizing and organizing commands with visual indicators
 - 📊 **Rich command metadata** (exit codes, duration, working directory, git info)
 - 🐚 **Seamless shell integration** for bash and zsh with automatic setup
 - 🔑 **Secure key derivation** (Argon2id) and session management
@@ -173,7 +174,52 @@ ccr note delete 123
 - **Visual feedback**: Commands with notes show a colored indicator (●) in the list
 - **Responsive design**: Editor adapts to terminal size automatically
 
+### Tag System
+
+CommandChronicles includes a comprehensive tag system for categorizing and organizing your commands with visual indicators and powerful search capabilities.
+
+```bash
+# Add a tag to a command (use command ID from search results)
+ccr tag add 123 "docker"
+
+# Remove a tag from a command
+ccr tag remove 123 "docker"
+
+# List all tags for a command
+ccr tag list 123
+
+# Show all commands with tags
+ccr tag show
+
+# Search commands by tag
+ccr tag search "docker"
+```
+
+**Tag Features:**
+- **Tag limits**: Up to 5 tags per command, 50 characters maximum per tag
+- **Color customization**: Per-tag color configuration for better visual organization
+- **Auto-tagging engine**: Intelligent automatic tagging based on command patterns
+- **Default tag rules**: Pre-configured tags for common categories (docker, git, file-ops, network, system, etc.)
+- **Encrypted storage**: Tags are encrypted alongside command data
+- **Visual indicators**: Tagged commands display colored tag badges in the TUI
+- **Integrated search**: Tag-based filtering and search capabilities
+
+**TUI Tag Integration:**
+- Tags appear as colored badges in the command list
+- View tags in command details view (Tab key)
+- Tags are preserved during search and filtering operations
+- Color-coded organization for quick visual categorization
+
 ## 📋 Quick Reference
+
+### Tag Commands
+```bash
+ccr tag add <id> <tag>       # Add tag to command
+ccr tag remove <id> <tag>    # Remove tag from command
+ccr tag list <id>            # List tags for command
+ccr tag show                 # Show all tagged commands
+ccr tag search <tag>         # Search by tag
+```
 
 ### Note Commands
 ```bash
@@ -279,14 +325,19 @@ CommandChronicles takes your privacy seriously:
 
 ## 🎯 Use Cases
 
-CommandChronicles with notes is perfect for:
+CommandChronicles with notes and tags is perfect for:
 
-- **DevOps workflows**: Document deployment commands with environment details
-- **Complex commands**: Add context to long docker, kubectl, or database commands
-- **Learning**: Annotate commands you're learning with explanations
-- **Team collaboration**: Share documented command snippets with colleagues
-- **Troubleshooting**: Note solutions and context for debugging commands
-- **Project documentation**: Keep command documentation alongside your history
+- **DevOps workflows**: Document deployment commands with environment details and tag by environment
+- **Complex commands**: Add context to long docker, kubectl, or database commands with explanatory notes
+- **Learning**: Annotate commands you're learning with explanations and categorize with learning tags
+- **Team collaboration**: Share documented and tagged command snippets with colleagues
+- **Troubleshooting**: Note solutions and context for debugging commands, tag by issue type
+- **Project documentation**: Keep command documentation alongside your history with project-specific tags
+- **Command organization**: Categorize commands by technology stack (docker, git, network, system)
+- **Quick filtering**: Find all Docker commands, Git operations, or system administration tasks instantly
+- **Workflow optimization**: Create searchable command libraries organized by function and context
+- **Environment management**: Tag commands by deployment environment (dev, staging, prod)
+- **Technology discovery**: Browse related commands through consistent tagging conventions
 
 ## 🤝 Contributing
 
