@@ -3063,6 +3063,8 @@ func (m model) loadExtendedCommands(baseCommand string) (tea.Model, tea.Cmd) {
 		}
 
 		response, err := m.session.searchService.Search(req)
+		if err == nil {
+		}
 		if err != nil {
 			m.session.logger.Error().
 				Err(err).
@@ -3657,10 +3659,21 @@ func (m model) performSearch() tea.Cmd {
 
 				// Filter working set records - validate records first
 				var validRecords []*storage.CommandRecord
+				corruptedCount := 0
 				for _, record := range workingSetCopy {
 					if m.isValidRecord(record) {
 						validRecords = append(validRecords, record)
+					} else {
+						corruptedCount++
 					}
+				}
+
+				if corruptedCount > 0 {
+					m.session.logger.Error().
+						Int("total_records", len(workingSetCopy)).
+						Int("corrupted_records", corruptedCount).
+						Int("valid_records", len(validRecords)).
+						Msg("SESSION WORKING SET CORRUPTION: Found corrupted records in working set")
 				}
 
 				if len(validRecords) == 0 {
@@ -3772,6 +3785,8 @@ func (m model) performSearch() tea.Cmd {
 			}
 
 			noteSearchResponse, err := m.session.searchService.Search(noteSearchReq)
+			if err == nil {
+			}
 			if err != nil {
 				m.session.logger.Warn().
 					Err(err).
@@ -3844,6 +3859,8 @@ func (m model) performSearch() tea.Cmd {
 				}
 
 				response, err = m.session.searchService.Search(tagSearchReq)
+				if err == nil {
+				}
 				if err != nil {
 					m.session.logger.Error().
 						Err(err).
@@ -3887,7 +3904,7 @@ func (m model) performSearch() tea.Cmd {
 					Err(err).
 					Str("query", query).
 					Bool("fuzzy_enabled", req.UseFuzzySearch).
-					Msg("Search operation failed")
+					Msg("Search failed")
 				return searchResultMsg{err: fmt.Errorf("search failed: %w", err), timeFilter: timeFilter}
 			}
 		}
@@ -4161,10 +4178,25 @@ func (m *model) updateSessionWorkingSet(newRecords []*storage.CommandRecord) {
 
 	// Create a map to track existing records by ID to avoid duplicates
 	existingIDs := make(map[int64]bool)
+	corruptedInExisting := 0
 	for _, record := range m.sessionWorkingSet {
 		if m.isValidRecord(record) {
 			existingIDs[record.ID] = true
+		} else {
+			corruptedInExisting++
+			m.session.logger.Error().
+				Int64("record_id", record.ID).
+				Int64("timestamp", record.Timestamp).
+				Str("command", record.Command).
+				Msg("CORRUPTION DETECTED: Found corrupted record in existing working set")
 		}
+	}
+
+	if corruptedInExisting > 0 {
+		m.session.logger.Error().
+			Int("corrupted_count", corruptedInExisting).
+			Int("total_existing", len(m.sessionWorkingSet)).
+			Msg("SESSION WORKING SET CORRUPTION: Corruption detected in existing working set during update")
 	}
 
 	// Filter out corrupted records from existing working set
@@ -4179,20 +4211,25 @@ func (m *model) updateSessionWorkingSet(newRecords []*storage.CommandRecord) {
 	// Add new records that aren't already in the working set
 	addedCount := 0
 	duplicateCount := 0
+	corruptedIncoming := 0
+
 	for _, record := range newRecords {
 		if m.isValidRecord(record) && !existingIDs[record.ID] {
-			// Create a deep copy to prevent corruption from shared references
-			recordCopy := m.deepCopyRecord(record)
-			m.sessionWorkingSet = append(m.sessionWorkingSet, recordCopy)
+			m.sessionWorkingSet = append(m.sessionWorkingSet, record)
+			existingIDs[record.ID] = true
 			addedCount++
 			m.session.logger.Debug().
 				Int64("record_id", record.ID).
+				Int64("timestamp", record.Timestamp).
 				Str("command", record.Command).
 				Msg("Added new record to working set")
 		} else if !m.isValidRecord(record) {
-			m.session.logger.Warn().
+			corruptedIncoming++
+			m.session.logger.Error().
 				Int64("record_id", record.ID).
-				Msg("Skipped corrupted record in working set update")
+				Int64("timestamp", record.Timestamp).
+				Str("command", record.Command).
+				Msg("CORRUPTION DETECTED: Incoming record is corrupted")
 		} else {
 			duplicateCount++
 			m.session.logger.Debug().
@@ -4200,6 +4237,13 @@ func (m *model) updateSessionWorkingSet(newRecords []*storage.CommandRecord) {
 				Str("command", record.Command).
 				Msg("Skipped duplicate record")
 		}
+	}
+
+	if corruptedIncoming > 0 {
+		m.session.logger.Error().
+			Int("corrupted_incoming", corruptedIncoming).
+			Int("total_incoming", len(newRecords)).
+			Msg("SESSION WORKING SET CORRUPTION: Corruption detected in incoming records")
 	}
 
 	// Sort by timestamp (most recent first)
@@ -4219,6 +4263,8 @@ func (m *model) updateSessionWorkingSet(newRecords []*storage.CommandRecord) {
 		Int("added_records", addedCount).
 		Int("duplicate_records", duplicateCount).
 		Int("trimmed_records", trimmedCount).
+		Int("corrupted_existing", corruptedInExisting).
+		Int("corrupted_incoming", corruptedIncoming).
 		Int("size_change", len(m.sessionWorkingSet)-initialSize).
 		Msg("Updated session working set")
 }
@@ -4240,16 +4286,35 @@ func (m *model) clearSessionWorkingSet(reason string) {
 // isValidRecord checks if a record is valid and not corrupted
 func (m *model) isValidRecord(record *storage.CommandRecord) bool {
 	if record == nil {
+		m.session.logger.Warn().Msg("Record validation failed: nil record")
 		return false
 	}
 
 	// Check for corrupted timestamp (the main symptom of the bug)
-	if record.Timestamp <= 0 || record.Timestamp > time.Now().UnixMilli() {
+	if record.Timestamp <= 0 {
+		m.session.logger.Error().
+			Int64("record_id", record.ID).
+			Int64("corrupted_timestamp", record.Timestamp).
+			Str("command", record.Command).
+			Str("corruption_type", "zero_or_negative_timestamp").
+			Msg("CORRUPTION DETECTED: Invalid timestamp in record")
+		return false
+	}
+
+	if record.Timestamp > time.Now().UnixMilli() {
+		m.session.logger.Warn().
+			Int64("record_id", record.ID).
+			Int64("future_timestamp", record.Timestamp).
+			Str("command", record.Command).
+			Msg("Record validation failed: future timestamp")
 		return false
 	}
 
 	// Check for other signs of corruption
 	if record.Command == "" && record.Note == "" && len(record.Tags) == 0 {
+		m.session.logger.Warn().
+			Int64("record_id", record.ID).
+			Msg("Record validation failed: completely empty record")
 		return false
 	}
 
@@ -4257,68 +4322,16 @@ func (m *model) isValidRecord(record *storage.CommandRecord) bool {
 	// Anything older than 10 years is suspicious
 	tenYearsAgo := time.Now().AddDate(-10, 0, 0).UnixMilli()
 	if record.Timestamp < tenYearsAgo {
+		m.session.logger.Warn().
+			Int64("record_id", record.ID).
+			Int64("old_timestamp", record.Timestamp).
+			Str("formatted_date", time.UnixMilli(record.Timestamp).Format("2006-01-02 15:04:05")).
+			Str("command", record.Command).
+			Msg("Record validation failed: timestamp too old (>10 years)")
 		return false
 	}
 
 	return true
-}
-
-// deepCopyRecord creates a deep copy of a command record to prevent shared memory corruption
-func (m *model) deepCopyRecord(record *storage.CommandRecord) *storage.CommandRecord {
-	if record == nil {
-		return nil
-	}
-
-	// Create new record with copied values
-	newRecord := &storage.CommandRecord{
-		ID:         record.ID,
-		Command:    record.Command,
-		ExitCode:   record.ExitCode,
-		Duration:   record.Duration,
-		Note:       record.Note,
-		WorkingDir: record.WorkingDir,
-		Timestamp:  record.Timestamp,
-		SessionID:  record.SessionID,
-		Hostname:   record.Hostname,
-		GitRoot:    record.GitRoot,
-		GitBranch:  record.GitBranch,
-		GitCommit:  record.GitCommit,
-		User:       record.User,
-		Shell:      record.Shell,
-		TTY:        record.TTY,
-		Version:    record.Version,
-		CreatedAt:  record.CreatedAt,
-		DeviceID:   record.DeviceID,
-		RecordHash: record.RecordHash,
-		SyncStatus: record.SyncStatus,
-	}
-
-	// Deep copy slices and maps
-	if record.Tags != nil {
-		newRecord.Tags = make([]string, len(record.Tags))
-		copy(newRecord.Tags, record.Tags)
-	}
-
-	if record.TagColors != nil {
-		newRecord.TagColors = make(map[string]string)
-		for k, v := range record.TagColors {
-			newRecord.TagColors[k] = v
-		}
-	}
-
-	if record.Environment != nil {
-		newRecord.Environment = make(map[string]string)
-		for k, v := range record.Environment {
-			newRecord.Environment[k] = v
-		}
-	}
-
-	if record.LastSynced != nil {
-		lastSynced := *record.LastSynced
-		newRecord.LastSynced = &lastSynced
-	}
-
-	return newRecord
 }
 
 // Message types
@@ -4353,8 +4366,29 @@ func min(a, b int) int {
 }
 
 func formatTimeAgo(timestamp int64) string {
+	// Detect timestamp corruption (Unix epoch = 0)
+	if timestamp == 0 {
+		// Log corruption detection with stack trace context
+		logger.GetLogger().WithComponent("tui-corruption").
+			Error().
+			Int64("corrupted_timestamp", timestamp).
+			Str("corruption_type", "zero_timestamp").
+			Msg("CORRUPTION DETECTED: Timestamp is zero (Unix epoch)")
+		return "CORRUPTED"
+	}
+
 	t := time.UnixMilli(timestamp)
 	duration := time.Since(t)
+
+	// Additional check for timestamps that would show extreme dates
+	if duration > 50*365*24*time.Hour { // More than 50 years ago
+		logger.GetLogger().WithComponent("tui-corruption").
+			Warn().
+			Int64("timestamp", timestamp).
+			Str("formatted_date", t.Format("2006-01-02 15:04:05")).
+			Dur("duration_since", duration).
+			Msg("SUSPICIOUS: Extremely old timestamp detected")
+	}
 
 	if duration < time.Minute {
 		return "now"

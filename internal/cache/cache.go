@@ -192,16 +192,17 @@ func (c *Cache) LoadHotCache() error {
 		return fmt.Errorf("failed to load hot cache: %w", err)
 	}
 
-	// Store records in hot cache with metadata
+	// Store records in hot cache with metadata using deep copy
 	c.hotCache = make([]*CacheEntry, len(result.Records))
 	now := time.Now()
 	for i, record := range result.Records {
+		recordCopy := c.deepCopyRecord(record)
 		c.hotCache[i] = &CacheEntry{
-			Record:      record,
+			Record:      recordCopy,
 			AccessTime:  now,
 			AccessCount: 0,
 			InsertTime:  now,
-			Size:        c.estimateRecordSize(record),
+			Size:        c.estimateRecordSize(recordCopy),
 		}
 	}
 	c.lastRefresh = now
@@ -214,7 +215,7 @@ func (c *Cache) LoadHotCache() error {
 		Int("loaded_count", len(c.hotCache)).
 		Int64("memory_mb", c.currentMemoryMB).
 		Dur("duration", duration).
-		Msg("Hot cache loaded successfully")
+		Msg("Hot cache loaded with deep copied records")
 
 	return nil
 }
@@ -343,16 +344,17 @@ func (c *Cache) LoadHotCacheWithOptions(opts *HotCacheLoadOptions) error {
 		return fmt.Errorf("failed to load hot cache with options: %w", err)
 	}
 
-	// Store records in hot cache
+	// Store records in hot cache with metadata using deep copy
 	c.hotCache = make([]*CacheEntry, len(result.Records))
 	now := time.Now()
 	for i, record := range result.Records {
+		recordCopy := c.deepCopyRecord(record)
 		c.hotCache[i] = &CacheEntry{
-			Record:      record,
+			Record:      recordCopy,
 			AccessTime:  now,
 			AccessCount: 0,
 			InsertTime:  now,
-			Size:        c.estimateRecordSize(record),
+			Size:        c.estimateRecordSize(recordCopy),
 		}
 	}
 	c.lastRefresh = now
@@ -669,24 +671,24 @@ func (c *Cache) matchesQuery(record *storage.CommandRecord, query string, queryF
 	// Check time constraints first (most selective)
 	if queryFilter != nil {
 		recordTime := time.UnixMilli(record.Timestamp)
-		
+
 		if queryFilter.Since != nil && recordTime.Before(*queryFilter.Since) {
 			return false
 		}
-		
+
 		if queryFilter.Until != nil && recordTime.After(*queryFilter.Until) {
 			return false
 		}
-		
+
 		// Check other filters
 		if queryFilter.SessionID != "" && record.SessionID != queryFilter.SessionID {
 			return false
 		}
-		
+
 		if queryFilter.Hostname != "" && record.Hostname != queryFilter.Hostname {
 			return false
 		}
-		
+
 		if queryFilter.WorkingDir != "" && record.WorkingDir != queryFilter.WorkingDir {
 			return false
 		}
@@ -832,11 +834,68 @@ func (c *Cache) estimateRecordSize(record *storage.CommandRecord) int64 {
 	return size
 }
 
+// deepCopyRecord creates a deep copy of a command record to prevent shared pointer corruption
+func (c *Cache) deepCopyRecord(record *storage.CommandRecord) *storage.CommandRecord {
+	if record == nil {
+		return nil
+	}
+
+	// Create new record with copied values
+	newRecord := &storage.CommandRecord{
+		ID:         record.ID,
+		Command:    record.Command,
+		ExitCode:   record.ExitCode,
+		Duration:   record.Duration,
+		Note:       record.Note,
+		WorkingDir: record.WorkingDir,
+		Timestamp:  record.Timestamp,
+		SessionID:  record.SessionID,
+		Hostname:   record.Hostname,
+		GitRoot:    record.GitRoot,
+		GitBranch:  record.GitBranch,
+		GitCommit:  record.GitCommit,
+		User:       record.User,
+		Shell:      record.Shell,
+		TTY:        record.TTY,
+		Version:    record.Version,
+		CreatedAt:  record.CreatedAt,
+		DeviceID:   record.DeviceID,
+		RecordHash: record.RecordHash,
+		SyncStatus: record.SyncStatus,
+	}
+
+	// Deep copy slices and maps
+	if record.Tags != nil {
+		newRecord.Tags = make([]string, len(record.Tags))
+		copy(newRecord.Tags, record.Tags)
+	}
+
+	if record.TagColors != nil {
+		newRecord.TagColors = make(map[string]string)
+		for k, v := range record.TagColors {
+			newRecord.TagColors[k] = v
+		}
+	}
+
+	if record.Environment != nil {
+		newRecord.Environment = make(map[string]string)
+		for k, v := range record.Environment {
+			newRecord.Environment[k] = v
+		}
+	}
+
+	if record.LastSynced != nil {
+		lastSynced := *record.LastSynced
+		newRecord.LastSynced = &lastSynced
+	}
+
+	return newRecord
+}
+
 // clearHotCacheUnsafe clears the hot cache without locking (caller must hold lock)
 func (c *Cache) clearHotCacheUnsafe() {
-	for _, entry := range c.hotCache {
-		c.secureClearRecord(entry.Record)
-	}
+	// Since we now use deep copies, we don't need to securely clear old entries
+	// to prevent corruption of records that might still be referenced elsewhere
 	c.hotCache = c.hotCache[:0]
 }
 
