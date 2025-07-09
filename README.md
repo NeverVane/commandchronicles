@@ -38,7 +38,7 @@
 - ⚡ **Smart caching system** for instant search results
 - 📈 **Beautiful command statistics** and usage analytics
 
-## 🖼️ TUI vs Traditional History
+## 🖼️ CommandChronicles TUI vs Traditional History
 
 ![History Comparison](docs/images/screenshots/historyComparison.png)
 
