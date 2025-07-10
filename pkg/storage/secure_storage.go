@@ -1396,6 +1396,11 @@ func (ss *SecureStorage) getRecordByID(recordID int64) (*storage.CommandRecord, 
 	return &record, nil
 }
 
+// GetDatabase returns the underlying database instance
+func (ss *SecureStorage) GetDatabase() *storage.Database {
+	return ss.db
+}
+
 // updateRecord updates an existing record in the database
 func (ss *SecureStorage) updateRecord(record *storage.CommandRecord) error {
 	if record.ID <= 0 {

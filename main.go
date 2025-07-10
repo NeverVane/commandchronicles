@@ -224,6 +224,7 @@ Get started:
 	rootCmd.AddCommand(deleteCmd(cfg))
 	rootCmd.AddCommand(wipeCmd(cfg))
 	rootCmd.AddCommand(syncCmd(cfg))
+	rootCmd.AddCommand(devicesCmd(cfg))
 	rootCmd.AddCommand(cancelSubscriptionCmd(cfg))
 	rootCmd.AddCommand(daemonCmd(cfg))
 	rootCmd.AddCommand(daemonControlCmd(cfg))
@@ -4997,6 +4998,229 @@ This shows all commands that are tagged with the specified tag.`,
 
 			return nil
 		},
+	}
+}
+
+func devicesCmd(cfg *config.Config) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "devices",
+		Short: "Manage devices and aliases",
+		Long: `List devices and manage human-readable aliases for sync rules.
+
+Devices are automatically discovered during sync operations. You can assign
+friendly names (aliases) to make device management easier when creating sync rules.`,
+	}
+
+	cmd.AddCommand(devicesShowCmd(cfg))
+	cmd.AddCommand(devicesAliasCmd(cfg))
+	cmd.AddCommand(devicesRemoveAliasCmd(cfg))
+
+	return cmd
+}
+
+func devicesShowCmd(cfg *config.Config) *cobra.Command {
+	return &cobra.Command{
+		Use:   "show",
+		Short: "List all devices with aliases",
+		Long: `Display all devices in your account with their current status and aliases.
+
+Shows device information including:
+- Device ID and alias (if set)
+- Hostname and platform
+- Last seen timestamp
+- Active status`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			storage, err := securestorage.NewSecureStorage(&securestorage.StorageOptions{
+				Config:          cfg,
+				CreateIfMissing: false,
+			})
+			if err != nil {
+				return fmt.Errorf("failed to initialize storage: %w", err)
+			}
+			defer storage.Close()
+
+			// Initialize auth manager
+			authManager, err := auth.NewAuthManager(cfg)
+			if err != nil {
+				return fmt.Errorf("failed to initialize auth manager: %w", err)
+			}
+			defer authManager.Close()
+
+			// Check if authenticated
+			if !authManager.IsSessionActive() {
+				return fmt.Errorf("please unlock your storage first with 'ccr unlock'")
+			}
+
+			// Initialize sync service to get device manager
+			syncService := sync.NewSyncService(cfg, storage, authManager)
+			deviceAliasManager := syncService.GetDeviceAliasManager()
+
+			// Get devices
+			devices, err := deviceAliasManager.GetDevices()
+			if err != nil {
+				return fmt.Errorf("failed to get devices: %w", err)
+			}
+
+			if len(devices) == 0 {
+				fmt.Println("No devices found. Run 'ccr sync now' to update device list.")
+				return nil
+			}
+
+			// Display devices
+			fmt.Println("Your Devices:")
+			for _, device := range devices {
+				status := "active"
+				if !device.IsActive {
+					status = "inactive"
+				}
+
+				displayName := device.DeviceID
+				if device.Alias != "" && device.IsEnabled {
+					displayName = fmt.Sprintf("%s (%s)", device.Alias, device.DeviceID)
+				}
+
+				currentMark := ""
+				if device.IsCurrent {
+					currentMark = " [current]"
+				}
+
+				lastSeen := time.Unix(device.LastSeen/1000, 0)
+				fmt.Printf("  %s%s - %s on %s - %s - last seen %s\n",
+					displayName, currentMark, device.Hostname, device.Platform,
+					status, formatTimeAgo(lastSeen))
+			}
+
+			return nil
+		},
+	}
+}
+
+func devicesAliasCmd(cfg *config.Config) *cobra.Command {
+	return &cobra.Command{
+		Use:   "alias <device-id> <alias>",
+		Short: "Set device alias",
+		Long: `Set a human-readable alias for a device.
+
+The alias must be unique and can contain letters, numbers, hyphens, and underscores.
+Use device aliases in sync rules instead of remembering device IDs.
+
+Examples:
+  ccr devices alias ccr_a1b2c3d4e5f6 work-laptop
+  ccr devices alias ccr_e5f6g7h8i9j0 home-desktop`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			deviceID := args[0]
+			alias := args[1]
+
+			storage, err := securestorage.NewSecureStorage(&securestorage.StorageOptions{
+				Config:          cfg,
+				CreateIfMissing: false,
+			})
+			if err != nil {
+				return fmt.Errorf("failed to initialize storage: %w", err)
+			}
+			defer storage.Close()
+
+			// Initialize auth manager
+			authManager, err := auth.NewAuthManager(cfg)
+			if err != nil {
+				return fmt.Errorf("failed to initialize auth manager: %w", err)
+			}
+			defer authManager.Close()
+
+			// Check if authenticated
+			if !authManager.IsSessionActive() {
+				return fmt.Errorf("please unlock your storage first with 'ccr unlock'")
+			}
+
+			// Initialize sync service to get device manager
+			syncService := sync.NewSyncService(cfg, storage, authManager)
+			deviceAliasManager := syncService.GetDeviceAliasManager()
+
+			// Set alias
+			if err := deviceAliasManager.SetDeviceAlias(deviceID, alias); err != nil {
+				return fmt.Errorf("failed to set device alias: %w", err)
+			}
+
+			fmt.Printf("✓ Set alias '%s' for device %s\n", alias, deviceID)
+			return nil
+		},
+	}
+}
+
+func devicesRemoveAliasCmd(cfg *config.Config) *cobra.Command {
+	return &cobra.Command{
+		Use:   "remove-alias <device-id>",
+		Short: "Remove device alias",
+		Long: `Remove the alias for a device.
+
+The device will be identified by its device ID after the alias is removed.
+
+Example:
+  ccr devices remove-alias ccr_a1b2c3d4e5f6`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			deviceID := args[0]
+
+			storage, err := securestorage.NewSecureStorage(&securestorage.StorageOptions{
+				Config:          cfg,
+				CreateIfMissing: false,
+			})
+			if err != nil {
+				return fmt.Errorf("failed to initialize storage: %w", err)
+			}
+			defer storage.Close()
+
+			// Initialize auth manager
+			authManager, err := auth.NewAuthManager(cfg)
+			if err != nil {
+				return fmt.Errorf("failed to initialize auth manager: %w", err)
+			}
+			defer authManager.Close()
+
+			// Check if authenticated
+			if !authManager.IsSessionActive() {
+				return fmt.Errorf("please unlock your storage first with 'ccr unlock'")
+			}
+
+			// Initialize sync service to get device manager
+			syncService := sync.NewSyncService(cfg, storage, authManager)
+			deviceAliasManager := syncService.GetDeviceAliasManager()
+
+			// Remove alias
+			if err := deviceAliasManager.RemoveDeviceAlias(deviceID); err != nil {
+				return fmt.Errorf("failed to remove device alias: %w", err)
+			}
+
+			fmt.Printf("✓ Removed alias for device %s\n", deviceID)
+			return nil
+		},
+	}
+}
+
+func formatTimeAgo(t time.Time) string {
+	duration := time.Since(t)
+
+	if duration < time.Minute {
+		return "just now"
+	} else if duration < time.Hour {
+		minutes := int(duration.Minutes())
+		if minutes == 1 {
+			return "1 minute ago"
+		}
+		return fmt.Sprintf("%d minutes ago", minutes)
+	} else if duration < 24*time.Hour {
+		hours := int(duration.Hours())
+		if hours == 1 {
+			return "1 hour ago"
+		}
+		return fmt.Sprintf("%d hours ago", hours)
+	} else {
+		days := int(duration.Hours() / 24)
+		if days == 1 {
+			return "1 day ago"
+		}
+		return fmt.Sprintf("%d days ago", days)
 	}
 }
 

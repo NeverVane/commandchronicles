@@ -19,17 +19,18 @@ import (
 )
 
 type SyncService struct {
-	config           *config.Config
-	logger           *logger.Logger
-	storage          *securestorage.SecureStorage
-	localAuth        *auth.AuthManager
-	remoteAuth       *RemoteAuthenticator
-	client           *SyncClient
-	conflictResolver *ConflictResolver
-	tokenManager     *TokenManager
-	deviceManager    *DeviceManager
-	hashGenerator    *HashGenerator
-	encryptor        *crypto.Encryptor
+	config             *config.Config
+	logger             *logger.Logger
+	storage            *securestorage.SecureStorage
+	localAuth          *auth.AuthManager
+	remoteAuth         *RemoteAuthenticator
+	client             *SyncClient
+	conflictResolver   *ConflictResolver
+	tokenManager       *TokenManager
+	deviceManager      *DeviceManager
+	deviceAliasManager *DeviceAliasManager
+	hashGenerator      *HashGenerator
+	encryptor          *crypto.Encryptor
 
 	// Sync state
 	lastSyncTime int64
@@ -104,22 +105,24 @@ func NewSyncService(cfg *config.Config, storage *securestorage.SecureStorage, lo
 	remoteAuth := NewRemoteAuthenticator(cfg, localAuth)
 	client := NewSyncClient(cfg, remoteAuth)
 	deviceManager := NewDeviceManager(cfg)
+	deviceAliasManager := NewDeviceAliasManager(storage, cfg)
 	hashGenerator := NewHashGenerator()
 
 	service := &SyncService{
-		config:           cfg,
-		logger:           logger.GetLogger().WithComponent("sync-service"),
-		storage:          storage,
-		localAuth:        localAuth,
-		remoteAuth:       remoteAuth,
-		client:           client,
-		conflictResolver: NewConflictResolver(),
-		tokenManager:     NewTokenManager(cfg),
-		deviceManager:    deviceManager,
-		hashGenerator:    hashGenerator,
-		encryptor:        crypto.NewEncryptor(),
-		lastSyncTime:     0,
-		isRunning:        false,
+		config:             cfg,
+		logger:             logger.GetLogger().WithComponent("sync-service"),
+		storage:            storage,
+		localAuth:          localAuth,
+		remoteAuth:         remoteAuth,
+		client:             client,
+		conflictResolver:   NewConflictResolver(),
+		tokenManager:       NewTokenManager(cfg),
+		deviceManager:      deviceManager,
+		deviceAliasManager: deviceAliasManager,
+		hashGenerator:      hashGenerator,
+		encryptor:          crypto.NewEncryptor(),
+		lastSyncTime:       0,
+		isRunning:          false,
 	}
 
 	// Inject sync providers into storage for metadata generation
@@ -190,6 +193,11 @@ func (s *SyncService) PerformSync() error {
 
 	// Load current sync time from storage
 	s.lastSyncTime = s.getLastSyncTime()
+
+	// Update device list during sync
+	if err := s.updateDevicesList(); err != nil {
+		s.logger.Warn().Err(err).Msg("Failed to update devices list during sync")
+	}
 
 	// Upload local changes first
 	if err := s.UploadNewRecords(); err != nil {
@@ -1763,4 +1771,25 @@ func (s *SyncService) createKeyCheck(key []byte) ([]byte, error) {
 
 func (s *SyncService) saveUser(user *auth.User) error {
 	return s.localAuth.SaveUser(user)
+}
+
+// updateDevicesList fetches and updates the local device list
+func (s *SyncService) updateDevicesList() error {
+	// Get devices from server
+	devices, err := s.client.GetDevices()
+	if err != nil {
+		return fmt.Errorf("failed to fetch devices from server: %w", err)
+	}
+
+	// Update local device list
+	if err := s.deviceAliasManager.UpdateDevicesList(devices); err != nil {
+		return fmt.Errorf("failed to update local device list: %w", err)
+	}
+
+	return nil
+}
+
+// GetDeviceAliasManager returns the device alias manager
+func (s *SyncService) GetDeviceAliasManager() *DeviceAliasManager {
+	return s.deviceAliasManager
 }

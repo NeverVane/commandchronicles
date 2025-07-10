@@ -198,10 +198,6 @@ type UserDevice struct {
 	IsActive    bool   `json:"is_active"`
 }
 
-type DevicesResponse struct {
-	Devices []UserDevice `json:"devices"`
-}
-
 type DeleteDeviceResponse struct {
 	Success        bool   `json:"success"`
 	Message        string `json:"message"`
@@ -216,6 +212,18 @@ type DeleteAccountResponse struct {
 	Success   bool   `json:"success"`
 	Message   string `json:"message"`
 	DeletedAt string `json:"deleted_at"`
+}
+
+type DevicesResponse struct {
+	Devices []ServerDevice `json:"devices"`
+}
+
+type ServerDevice struct {
+	DeviceID string `json:"device_id"`
+	Hostname string `json:"hostname"`
+	Platform string `json:"platform"`
+	LastSeen string `json:"last_seen"`
+	IsActive bool   `json:"is_active"`
 }
 
 // ServerPasswordChangeRequest represents the request to change password on server
@@ -914,4 +922,24 @@ func (sc *SyncClient) handleBatchUpdateError(resp *http.Response) error {
 
 	// Fallback to raw response
 	return fmt.Errorf("batch update failed with status %d: %s", resp.StatusCode, string(bodyBytes))
+}
+
+// GetDevices fetches the list of devices for the current user
+func (sc *SyncClient) GetDevices() ([]ServerDevice, error) {
+	req, err := sc.newAuthenticatedRequest("GET", sc.apiURL("/devices"), nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	resp, err := sc.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+
+	var devicesResp DevicesResponse
+	if err := sc.handleResponse(resp, &devicesResp); err != nil {
+		return nil, err
+	}
+
+	return devicesResp.Devices, nil
 }

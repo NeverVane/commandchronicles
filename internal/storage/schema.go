@@ -73,7 +73,7 @@ type DatabaseSchema struct {
 // GetCurrentSchema returns the current database schema
 func GetCurrentSchema() *DatabaseSchema {
 	return &DatabaseSchema{
-		Version: 2,
+		Version: 3,
 		Tables: []string{
 			`CREATE TABLE IF NOT EXISTS history (
 				id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -103,6 +103,31 @@ func GetCurrentSchema() *DatabaseSchema {
 				shell_type TEXT NOT NULL,
 				created_at INTEGER NOT NULL
 			)`,
+
+			`CREATE TABLE IF NOT EXISTS devices (
+				device_id TEXT PRIMARY KEY,
+				hostname TEXT NOT NULL,
+				platform TEXT NOT NULL,
+				last_seen INTEGER NOT NULL,
+				is_active BOOLEAN DEFAULT true,
+				updated_at INTEGER NOT NULL
+			)`,
+
+			`CREATE TABLE IF NOT EXISTS device_aliases (
+				device_id TEXT PRIMARY KEY,
+				alias TEXT UNIQUE NOT NULL,
+				is_enabled BOOLEAN DEFAULT true,
+				created_at INTEGER NOT NULL,
+				updated_at INTEGER NOT NULL,
+				FOREIGN KEY (device_id) REFERENCES devices(device_id)
+			)`,
+
+			`CREATE TABLE IF NOT EXISTS sync_rules (
+				id TEXT PRIMARY KEY,
+				rule_data TEXT NOT NULL,
+				active BOOLEAN DEFAULT true,
+				created_at INTEGER NOT NULL
+			)`,
 		},
 
 		Indexes: []string{
@@ -118,6 +143,10 @@ func GetCurrentSchema() *DatabaseSchema {
 			`CREATE INDEX IF NOT EXISTS idx_session_start_time ON session_metadata(start_time)`,
 			`CREATE INDEX IF NOT EXISTS idx_session_hostname ON session_metadata(hostname)`,
 			`CREATE INDEX IF NOT EXISTS idx_session_user ON session_metadata(user_name)`,
+
+			`CREATE INDEX IF NOT EXISTS idx_devices_active ON devices(is_active)`,
+			`CREATE INDEX IF NOT EXISTS idx_device_aliases_enabled ON device_aliases(is_enabled)`,
+			`CREATE INDEX IF NOT EXISTS idx_sync_rules_active ON sync_rules(active)`,
 		},
 
 		Migrations: map[int][]string{
@@ -129,6 +158,33 @@ func GetCurrentSchema() *DatabaseSchema {
 				`CREATE INDEX IF NOT EXISTS idx_history_sync_status ON history(sync_status)`,
 				`CREATE INDEX IF NOT EXISTS idx_history_device_id ON history(device_id)`,
 				`CREATE INDEX IF NOT EXISTS idx_history_last_synced ON history(last_synced)`,
+			},
+			3: []string{
+				`CREATE TABLE IF NOT EXISTS devices (
+					device_id TEXT PRIMARY KEY,
+					hostname TEXT NOT NULL,
+					platform TEXT NOT NULL,
+					last_seen INTEGER NOT NULL,
+					is_active BOOLEAN DEFAULT true,
+					updated_at INTEGER NOT NULL
+				)`,
+				`CREATE TABLE IF NOT EXISTS device_aliases (
+					device_id TEXT PRIMARY KEY,
+					alias TEXT UNIQUE NOT NULL,
+					is_enabled BOOLEAN DEFAULT true,
+					created_at INTEGER NOT NULL,
+					updated_at INTEGER NOT NULL,
+					FOREIGN KEY (device_id) REFERENCES devices(device_id)
+				)`,
+				`CREATE TABLE IF NOT EXISTS sync_rules (
+					id TEXT PRIMARY KEY,
+					rule_data TEXT NOT NULL,
+					active BOOLEAN DEFAULT true,
+					created_at INTEGER NOT NULL
+				)`,
+				`CREATE INDEX IF NOT EXISTS idx_devices_active ON devices(is_active)`,
+				`CREATE INDEX IF NOT EXISTS idx_device_aliases_enabled ON device_aliases(is_enabled)`,
+				`CREATE INDEX IF NOT EXISTS idx_sync_rules_active ON sync_rules(active)`,
 			},
 		},
 	}
