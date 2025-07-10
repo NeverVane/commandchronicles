@@ -29,6 +29,7 @@ type SyncService struct {
 	tokenManager       *TokenManager
 	deviceManager      *DeviceManager
 	deviceAliasManager *DeviceAliasManager
+	rulesManager       *RulesManager
 	hashGenerator      *HashGenerator
 	encryptor          *crypto.Encryptor
 
@@ -106,6 +107,7 @@ func NewSyncService(cfg *config.Config, storage *securestorage.SecureStorage, lo
 	client := NewSyncClient(cfg, remoteAuth)
 	deviceManager := NewDeviceManager(cfg)
 	deviceAliasManager := NewDeviceAliasManager(storage, cfg)
+	rulesManager := NewRulesManager(storage, cfg, deviceAliasManager)
 	hashGenerator := NewHashGenerator()
 
 	service := &SyncService{
@@ -119,6 +121,7 @@ func NewSyncService(cfg *config.Config, storage *securestorage.SecureStorage, lo
 		tokenManager:       NewTokenManager(cfg),
 		deviceManager:      deviceManager,
 		deviceAliasManager: deviceAliasManager,
+		rulesManager:       rulesManager,
 		hashGenerator:      hashGenerator,
 		encryptor:          crypto.NewEncryptor(),
 		lastSyncTime:       0,
@@ -1792,4 +1795,9 @@ func (s *SyncService) updateDevicesList() error {
 // GetDeviceAliasManager returns the device alias manager
 func (s *SyncService) GetDeviceAliasManager() *DeviceAliasManager {
 	return s.deviceAliasManager
+}
+
+// GetRulesManager returns the rules manager
+func (s *SyncService) GetRulesManager() *RulesManager {
+	return s.rulesManager
 }

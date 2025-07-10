@@ -225,6 +225,7 @@ Get started:
 	rootCmd.AddCommand(wipeCmd(cfg))
 	rootCmd.AddCommand(syncCmd(cfg))
 	rootCmd.AddCommand(devicesCmd(cfg))
+	rootCmd.AddCommand(rulesCmd(cfg))
 	rootCmd.AddCommand(cancelSubscriptionCmd(cfg))
 	rootCmd.AddCommand(daemonCmd(cfg))
 	rootCmd.AddCommand(daemonControlCmd(cfg))
@@ -5193,6 +5194,412 @@ Example:
 			}
 
 			fmt.Printf("✓ Removed alias for device %s\n", deviceID)
+			return nil
+		},
+	}
+}
+
+func rulesCmd(cfg *config.Config) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "rules",
+		Short: "Manage sync rules",
+		Long: `Create and manage rules for controlling command synchronization.
+
+Rules allow you to control which commands are synced to which devices.
+You can create allow or deny rules based on devices and conditions.`,
+	}
+
+	cmd.AddCommand(rulesListCmd(cfg))
+	cmd.AddCommand(rulesAllowCmd(cfg))
+	cmd.AddCommand(rulesDenyCmd(cfg))
+	cmd.AddCommand(rulesDeleteCmd(cfg))
+	cmd.AddCommand(rulesEnableCmd(cfg))
+	cmd.AddCommand(rulesDisableCmd(cfg))
+	cmd.AddCommand(rulesStatusCmd(cfg))
+
+	return cmd
+}
+
+func rulesListCmd(cfg *config.Config) *cobra.Command {
+	return &cobra.Command{
+		Use:   "list",
+		Short: "List all sync rules",
+		Long: `Display all sync rules with their status and configuration.
+
+Shows rule information including:
+- Rule ID and name
+- Action (allow/deny)
+- Target device
+- Active status`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			storage, err := securestorage.NewSecureStorage(&securestorage.StorageOptions{
+				Config:          cfg,
+				CreateIfMissing: false,
+			})
+			if err != nil {
+				return fmt.Errorf("failed to initialize storage: %w", err)
+			}
+			defer storage.Close()
+
+			// Initialize auth manager
+			authManager, err := auth.NewAuthManager(cfg)
+			if err != nil {
+				return fmt.Errorf("failed to initialize auth manager: %w", err)
+			}
+			defer authManager.Close()
+
+			// Check if authenticated
+			if !authManager.IsSessionActive() {
+				return fmt.Errorf("please unlock your storage first with 'ccr unlock'")
+			}
+
+			// Initialize sync service to get rules manager
+			syncService := sync.NewSyncService(cfg, storage, authManager)
+			rulesManager := syncService.GetRulesManager()
+
+			// Get rules
+			rules, err := rulesManager.ListRules()
+			if err != nil {
+				return fmt.Errorf("failed to list rules: %w", err)
+			}
+
+			if len(rules) == 0 {
+				fmt.Println("No sync rules found.")
+				fmt.Println("Create rules with 'ccr rules allow <device>' or 'ccr rules deny <device>'")
+				return nil
+			}
+
+			// Get device alias manager for resolving device names
+			deviceAliasManager := syncService.GetDeviceAliasManager()
+
+			// Display rules
+			fmt.Println("Sync Rules:")
+			for _, rule := range rules {
+				status := "active"
+				if !rule.Active {
+					status = "inactive"
+				}
+
+				// Try to get device alias
+				deviceDisplay := rule.TargetDevice
+				if alias, err := deviceAliasManager.GetDeviceAlias(rule.TargetDevice); err == nil {
+					deviceDisplay = fmt.Sprintf("%s (%s)", alias, rule.TargetDevice)
+				}
+
+				fmt.Printf("  %s (%s) - %s %s [%s]\n",
+					rule.Name, rule.ID[:8], rule.Action, deviceDisplay, status)
+
+				if rule.Description != "" {
+					fmt.Printf("    %s\n", rule.Description)
+				}
+			}
+
+			return nil
+		},
+	}
+}
+
+func rulesAllowCmd(cfg *config.Config) *cobra.Command {
+	return &cobra.Command{
+		Use:   "allow <device>",
+		Short: "Create allow rule for device",
+		Long: `Create a rule to allow command sync to a specific device.
+
+The device can be specified by device ID or alias.
+
+Examples:
+  ccr rules allow work-laptop
+  ccr rules allow ccr_a1b2c3d4e5f6`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			device := args[0]
+
+			storage, err := securestorage.NewSecureStorage(&securestorage.StorageOptions{
+				Config:          cfg,
+				CreateIfMissing: false,
+			})
+			if err != nil {
+				return fmt.Errorf("failed to initialize storage: %w", err)
+			}
+			defer storage.Close()
+
+			// Initialize auth manager
+			authManager, err := auth.NewAuthManager(cfg)
+			if err != nil {
+				return fmt.Errorf("failed to initialize auth manager: %w", err)
+			}
+			defer authManager.Close()
+
+			// Check if authenticated
+			if !authManager.IsSessionActive() {
+				return fmt.Errorf("please unlock your storage first with 'ccr unlock'")
+			}
+
+			// Initialize sync service to get rules manager
+			syncService := sync.NewSyncService(cfg, storage, authManager)
+			rulesManager := syncService.GetRulesManager()
+
+			// Create allow rule
+			if err := rulesManager.CreateAllowRule(device); err != nil {
+				return fmt.Errorf("failed to create allow rule: %w", err)
+			}
+
+			fmt.Printf("✓ Created allow rule for device %s\n", device)
+			return nil
+		},
+	}
+}
+
+func rulesDenyCmd(cfg *config.Config) *cobra.Command {
+	return &cobra.Command{
+		Use:   "deny <device>",
+		Short: "Create deny rule for device",
+		Long: `Create a rule to deny command sync to a specific device.
+
+The device can be specified by device ID or alias.
+
+Examples:
+  ccr rules deny personal-phone
+  ccr rules deny ccr_e5f6g7h8i9j0`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			device := args[0]
+
+			storage, err := securestorage.NewSecureStorage(&securestorage.StorageOptions{
+				Config:          cfg,
+				CreateIfMissing: false,
+			})
+			if err != nil {
+				return fmt.Errorf("failed to initialize storage: %w", err)
+			}
+			defer storage.Close()
+
+			// Initialize auth manager
+			authManager, err := auth.NewAuthManager(cfg)
+			if err != nil {
+				return fmt.Errorf("failed to initialize auth manager: %w", err)
+			}
+			defer authManager.Close()
+
+			// Check if authenticated
+			if !authManager.IsSessionActive() {
+				return fmt.Errorf("please unlock your storage first with 'ccr unlock'")
+			}
+
+			// Initialize sync service to get rules manager
+			syncService := sync.NewSyncService(cfg, storage, authManager)
+			rulesManager := syncService.GetRulesManager()
+
+			// Create deny rule
+			if err := rulesManager.CreateDenyRule(device); err != nil {
+				return fmt.Errorf("failed to create deny rule: %w", err)
+			}
+
+			fmt.Printf("✓ Created deny rule for device %s\n", device)
+			return nil
+		},
+	}
+}
+
+func rulesDeleteCmd(cfg *config.Config) *cobra.Command {
+	return &cobra.Command{
+		Use:   "delete <rule-id>",
+		Short: "Delete sync rule",
+		Long: `Delete a sync rule by its ID.
+
+Use 'ccr rules list' to see rule IDs.
+
+Example:
+  ccr rules delete 12345678`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ruleID := args[0]
+
+			storage, err := securestorage.NewSecureStorage(&securestorage.StorageOptions{
+				Config:          cfg,
+				CreateIfMissing: false,
+			})
+			if err != nil {
+				return fmt.Errorf("failed to initialize storage: %w", err)
+			}
+			defer storage.Close()
+
+			// Initialize auth manager
+			authManager, err := auth.NewAuthManager(cfg)
+			if err != nil {
+				return fmt.Errorf("failed to initialize auth manager: %w", err)
+			}
+			defer authManager.Close()
+
+			// Check if authenticated
+			if !authManager.IsSessionActive() {
+				return fmt.Errorf("please unlock your storage first with 'ccr unlock'")
+			}
+
+			// Initialize sync service to get rules manager
+			syncService := sync.NewSyncService(cfg, storage, authManager)
+			rulesManager := syncService.GetRulesManager()
+
+			// Delete rule
+			if err := rulesManager.DeleteRule(ruleID); err != nil {
+				return fmt.Errorf("failed to delete rule: %w", err)
+			}
+
+			fmt.Printf("✓ Deleted rule %s\n", ruleID)
+			return nil
+		},
+	}
+}
+
+func rulesEnableCmd(cfg *config.Config) *cobra.Command {
+	return &cobra.Command{
+		Use:   "enable <rule-id>",
+		Short: "Enable sync rule",
+		Long: `Enable a sync rule by its ID.
+
+Use 'ccr rules list' to see rule IDs.
+
+Example:
+  ccr rules enable 12345678`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ruleID := args[0]
+
+			storage, err := securestorage.NewSecureStorage(&securestorage.StorageOptions{
+				Config:          cfg,
+				CreateIfMissing: false,
+			})
+			if err != nil {
+				return fmt.Errorf("failed to initialize storage: %w", err)
+			}
+			defer storage.Close()
+
+			// Initialize auth manager
+			authManager, err := auth.NewAuthManager(cfg)
+			if err != nil {
+				return fmt.Errorf("failed to initialize auth manager: %w", err)
+			}
+			defer authManager.Close()
+
+			// Check if authenticated
+			if !authManager.IsSessionActive() {
+				return fmt.Errorf("please unlock your storage first with 'ccr unlock'")
+			}
+
+			// Initialize sync service to get rules manager
+			syncService := sync.NewSyncService(cfg, storage, authManager)
+			rulesManager := syncService.GetRulesManager()
+
+			// Enable rule
+			if err := rulesManager.ToggleRule(ruleID, true); err != nil {
+				return fmt.Errorf("failed to enable rule: %w", err)
+			}
+
+			fmt.Printf("✓ Enabled rule %s\n", ruleID)
+			return nil
+		},
+	}
+}
+
+func rulesDisableCmd(cfg *config.Config) *cobra.Command {
+	return &cobra.Command{
+		Use:   "disable <rule-id>",
+		Short: "Disable sync rule",
+		Long: `Disable a sync rule by its ID.
+
+Use 'ccr rules list' to see rule IDs.
+
+Example:
+  ccr rules disable 12345678`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ruleID := args[0]
+
+			storage, err := securestorage.NewSecureStorage(&securestorage.StorageOptions{
+				Config:          cfg,
+				CreateIfMissing: false,
+			})
+			if err != nil {
+				return fmt.Errorf("failed to initialize storage: %w", err)
+			}
+			defer storage.Close()
+
+			// Initialize auth manager
+			authManager, err := auth.NewAuthManager(cfg)
+			if err != nil {
+				return fmt.Errorf("failed to initialize auth manager: %w", err)
+			}
+			defer authManager.Close()
+
+			// Check if authenticated
+			if !authManager.IsSessionActive() {
+				return fmt.Errorf("please unlock your storage first with 'ccr unlock'")
+			}
+
+			// Initialize sync service to get rules manager
+			syncService := sync.NewSyncService(cfg, storage, authManager)
+			rulesManager := syncService.GetRulesManager()
+
+			// Disable rule
+			if err := rulesManager.ToggleRule(ruleID, false); err != nil {
+				return fmt.Errorf("failed to disable rule: %w", err)
+			}
+
+			fmt.Printf("✓ Disabled rule %s\n", ruleID)
+			return nil
+		},
+	}
+}
+
+func rulesStatusCmd(cfg *config.Config) *cobra.Command {
+	return &cobra.Command{
+		Use:   "status",
+		Short: "Show rules summary",
+		Long:  `Display a summary of all sync rules and their current status.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			storage, err := securestorage.NewSecureStorage(&securestorage.StorageOptions{
+				Config:          cfg,
+				CreateIfMissing: false,
+			})
+			if err != nil {
+				return fmt.Errorf("failed to initialize storage: %w", err)
+			}
+			defer storage.Close()
+
+			// Initialize auth manager
+			authManager, err := auth.NewAuthManager(cfg)
+			if err != nil {
+				return fmt.Errorf("failed to initialize auth manager: %w", err)
+			}
+			defer authManager.Close()
+
+			// Check if authenticated
+			if !authManager.IsSessionActive() {
+				return fmt.Errorf("please unlock your storage first with 'ccr unlock'")
+			}
+
+			// Initialize sync service to get rules manager
+			syncService := sync.NewSyncService(cfg, storage, authManager)
+			rulesManager := syncService.GetRulesManager()
+
+			// Get summary
+			summary, err := rulesManager.GetRulesSummary()
+			if err != nil {
+				return fmt.Errorf("failed to get rules summary: %w", err)
+			}
+
+			// Display summary
+			fmt.Println("Sync Rules Summary:")
+			fmt.Printf("  Total rules: %d\n", summary.TotalRules)
+			fmt.Printf("  Active rules: %d\n", summary.ActiveRules)
+			fmt.Printf("  Allow rules: %d\n", summary.AllowRules)
+			fmt.Printf("  Deny rules: %d\n", summary.DenyRules)
+
+			if summary.TotalRules == 0 {
+				fmt.Println("\nNo rules configured. Commands will sync to all devices by default.")
+				fmt.Println("Create rules with 'ccr rules allow <device>' or 'ccr rules deny <device>'")
+			}
+
 			return nil
 		},
 	}
