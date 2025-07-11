@@ -307,6 +307,166 @@ func (rm *RulesManager) CreateDenyRule(deviceAliasOrID string) error {
 	return rm.CreateRule(rule)
 }
 
+// CreateConditionalAllowRule creates an allow rule with specific conditions
+func (rm *RulesManager) CreateConditionalAllowRule(deviceAliasOrID string, conditions []RuleCondition) error {
+	// Resolve device alias to ID
+	deviceID, err := rm.deviceAliasManager.ResolveAlias(deviceAliasOrID)
+	if err != nil {
+		return fmt.Errorf("failed to resolve device: %w", err)
+	}
+
+	// Get device alias for naming (if exists)
+	alias, _ := rm.deviceAliasManager.GetDeviceAlias(deviceID)
+	displayName := deviceAliasOrID
+	if alias != "" {
+		displayName = alias
+	}
+
+	// Generate condition description
+	conditionDesc := rm.generateConditionDescription(conditions)
+	ruleName := fmt.Sprintf("Allow %s to %s", conditionDesc, displayName)
+	ruleDesc := fmt.Sprintf("Allow commands matching %s to sync to device %s", conditionDesc, displayName)
+
+	rule := &SyncRule{
+		Name:         ruleName,
+		Description:  ruleDesc,
+		Action:       "allow",
+		TargetDevice: deviceID,
+		Conditions:   conditions,
+		Active:       true,
+	}
+
+	return rm.CreateRule(rule)
+}
+
+// CreateConditionalDenyRule creates a deny rule with specific conditions
+func (rm *RulesManager) CreateConditionalDenyRule(deviceAliasOrID string, conditions []RuleCondition) error {
+	// Resolve device alias to ID
+	deviceID, err := rm.deviceAliasManager.ResolveAlias(deviceAliasOrID)
+	if err != nil {
+		return fmt.Errorf("failed to resolve device: %w", err)
+	}
+
+	// Get device alias for naming (if exists)
+	alias, _ := rm.deviceAliasManager.GetDeviceAlias(deviceID)
+	displayName := deviceAliasOrID
+	if alias != "" {
+		displayName = alias
+	}
+
+	// Generate condition description
+	conditionDesc := rm.generateConditionDescription(conditions)
+	ruleName := fmt.Sprintf("Deny %s to %s", conditionDesc, displayName)
+	ruleDesc := fmt.Sprintf("Prevent commands matching %s from syncing to device %s", conditionDesc, displayName)
+
+	rule := &SyncRule{
+		Name:         ruleName,
+		Description:  ruleDesc,
+		Action:       "deny",
+		TargetDevice: deviceID,
+		Conditions:   conditions,
+		Active:       true,
+	}
+
+	return rm.CreateRule(rule)
+}
+
+// CreateTagRule creates a rule based on command tags
+func (rm *RulesManager) CreateTagRule(deviceAliasOrID, tag string, allow bool) error {
+	conditions := []RuleCondition{
+		{
+			Type:     "tag",
+			Operator: "equals",
+			Value:    tag,
+		},
+	}
+
+	if allow {
+		return rm.CreateConditionalAllowRule(deviceAliasOrID, conditions)
+	}
+	return rm.CreateConditionalDenyRule(deviceAliasOrID, conditions)
+}
+
+// CreateDirectoryRule creates a rule based on working directory
+func (rm *RulesManager) CreateDirectoryRule(deviceAliasOrID, directory string, allow bool) error {
+	conditions := []RuleCondition{
+		{
+			Type:     "working_dir",
+			Operator: "starts_with",
+			Value:    directory,
+		},
+	}
+
+	if allow {
+		return rm.CreateConditionalAllowRule(deviceAliasOrID, conditions)
+	}
+	return rm.CreateConditionalDenyRule(deviceAliasOrID, conditions)
+}
+
+// CreatePatternRule creates a rule based on command pattern
+func (rm *RulesManager) CreatePatternRule(deviceAliasOrID, pattern string, allow bool) error {
+	conditions := []RuleCondition{
+		{
+			Type:     "command_pattern",
+			Operator: "starts_with",
+			Value:    pattern,
+		},
+	}
+
+	if allow {
+		return rm.CreateConditionalAllowRule(deviceAliasOrID, conditions)
+	}
+	return rm.CreateConditionalDenyRule(deviceAliasOrID, conditions)
+}
+
+// CreateTimeRule creates a rule based on time constraints
+func (rm *RulesManager) CreateTimeRule(deviceAliasOrID, timeCondition string, allow bool) error {
+	conditions := []RuleCondition{
+		{
+			Type:     "time",
+			Operator: "during",
+			Value:    timeCondition,
+		},
+	}
+
+	if allow {
+		return rm.CreateConditionalAllowRule(deviceAliasOrID, conditions)
+	}
+	return rm.CreateConditionalDenyRule(deviceAliasOrID, conditions)
+}
+
+// generateConditionDescription creates a human-readable description of conditions
+func (rm *RulesManager) generateConditionDescription(conditions []RuleCondition) string {
+	if len(conditions) == 0 {
+		return "all commands"
+	}
+
+	var parts []string
+	for _, condition := range conditions {
+		var desc string
+		switch condition.Type {
+		case "tag":
+			desc = fmt.Sprintf("tag:%s", condition.Value)
+		case "working_dir":
+			desc = fmt.Sprintf("dir:%s", condition.Value)
+		case "command_pattern":
+			desc = fmt.Sprintf("cmd:%s", condition.Value)
+		case "time":
+			desc = fmt.Sprintf("time:%s", condition.Value)
+		default:
+			desc = fmt.Sprintf("%s:%s", condition.Type, condition.Value)
+		}
+
+		if condition.Negate {
+			desc = "!" + desc
+		}
+
+		parts = append(parts, desc)
+	}
+
+	return strings.Join(parts, " AND ")
+}
+
 // GetRulesSummary returns a summary of all rules
 func (rm *RulesManager) GetRulesSummary() (*RuleSummary, error) {
 	rules, err := rm.ListRules()

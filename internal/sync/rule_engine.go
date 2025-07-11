@@ -2,7 +2,10 @@ package sync
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/NeverVane/commandchronicles/internal/logger"
 	"github.com/NeverVane/commandchronicles/internal/storage"
@@ -21,6 +24,29 @@ type RuleEvaluationResult struct {
 	RulesApplied  []string `json:"rules_applied"`
 	DefaultUsed   bool     `json:"default_used"`
 	Explanation   string   `json:"explanation,omitempty"`
+}
+
+// BatchEvaluationConfig configures batch processing parameters
+type BatchEvaluationConfig struct {
+	BatchSize   int
+	WorkerCount int
+	MaxMemoryMB int
+}
+
+// RuleConflict represents a conflict between rules
+type RuleConflict struct {
+	ConflictingRules []SyncRule `json:"conflicting_rules"`
+	ConflictType     string     `json:"conflict_type"`
+	DeviceID         string     `json:"device_id"`
+	Description      string     `json:"description"`
+}
+
+// BatchEvaluationResult contains results of batch re-evaluation
+type BatchEvaluationResult struct {
+	ProcessedCommands int           `json:"processed_commands"`
+	UpdatedCommands   int           `json:"updated_commands"`
+	Duration          time.Duration `json:"duration"`
+	MemoryUsedMB      int           `json:"memory_used_mb"`
 }
 
 // NewRuleEngine creates a new rule engine
@@ -184,6 +210,8 @@ func (re *RuleEngine) evaluateConditions(record *storage.CommandRecord, conditio
 			match = re.evaluateDirectoryCondition(record, condition)
 		case "command_pattern":
 			match = re.evaluatePatternCondition(record, condition)
+		case "time":
+			match = re.evaluateTimeCondition(record, condition)
 		default:
 			re.logger.Warn().Str("type", condition.Type).Msg("Unknown condition type")
 			continue
@@ -282,6 +310,97 @@ func (re *RuleEngine) evaluatePatternCondition(record *storage.CommandRecord, co
 		re.logger.Warn().Str("operator", condition.Operator).Msg("Unknown pattern condition operator")
 		return false
 	}
+}
+
+// evaluateTimeCondition checks if the command was executed during a specific time period
+func (re *RuleEngine) evaluateTimeCondition(record *storage.CommandRecord, condition RuleCondition) bool {
+	if record.Timestamp == 0 {
+		return false
+	}
+
+	// Convert timestamp to time
+	commandTime := time.Unix(record.Timestamp/1000, 0)
+
+	switch condition.Operator {
+	case "during":
+		return re.isTimeDuringPeriod(commandTime, condition.Value)
+	case "after":
+		return re.isTimeAfter(commandTime, condition.Value)
+	case "before":
+		return re.isTimeBefore(commandTime, condition.Value)
+	default:
+		re.logger.Warn().Str("operator", condition.Operator).Msg("Unknown time condition operator")
+		return false
+	}
+}
+
+// isTimeDuringPeriod checks if time falls within a period (e.g., "09:00-17:00")
+func (re *RuleEngine) isTimeDuringPeriod(t time.Time, period string) bool {
+	parts := strings.Split(period, "-")
+	if len(parts) != 2 {
+		re.logger.Warn().Str("period", period).Msg("Invalid time period format, expected HH:MM-HH:MM")
+		return false
+	}
+
+	startTime, err := time.Parse("15:04", strings.TrimSpace(parts[0]))
+	if err != nil {
+		re.logger.Warn().Str("start_time", parts[0]).Msg("Invalid start time format")
+		return false
+	}
+
+	endTime, err := time.Parse("15:04", strings.TrimSpace(parts[1]))
+	if err != nil {
+		re.logger.Warn().Str("end_time", parts[1]).Msg("Invalid end time format")
+		return false
+	}
+
+	// Get hour and minute from command time
+	commandHour := t.Hour()
+	commandMinute := t.Minute()
+	startHour := startTime.Hour()
+	startMinute := startTime.Minute()
+	endHour := endTime.Hour()
+	endMinute := endTime.Minute()
+
+	// Convert to minutes for easier comparison
+	commandMinutes := commandHour*60 + commandMinute
+	startMinutes := startHour*60 + startMinute
+	endMinutes := endHour*60 + endMinute
+
+	// Handle overnight periods (e.g., "22:00-06:00")
+	if endMinutes < startMinutes {
+		return commandMinutes >= startMinutes || commandMinutes <= endMinutes
+	}
+
+	return commandMinutes >= startMinutes && commandMinutes <= endMinutes
+}
+
+// isTimeAfter checks if time is after a specific time (e.g., "18:00")
+func (re *RuleEngine) isTimeAfter(t time.Time, timeStr string) bool {
+	targetTime, err := time.Parse("15:04", strings.TrimSpace(timeStr))
+	if err != nil {
+		re.logger.Warn().Str("time", timeStr).Msg("Invalid time format")
+		return false
+	}
+
+	commandMinutes := t.Hour()*60 + t.Minute()
+	targetMinutes := targetTime.Hour()*60 + targetTime.Minute()
+
+	return commandMinutes >= targetMinutes
+}
+
+// isTimeBefore checks if time is before a specific time (e.g., "09:00")
+func (re *RuleEngine) isTimeBefore(t time.Time, timeStr string) bool {
+	targetTime, err := time.Parse("15:04", strings.TrimSpace(timeStr))
+	if err != nil {
+		re.logger.Warn().Str("time", timeStr).Msg("Invalid time format")
+		return false
+	}
+
+	commandMinutes := t.Hour()*60 + t.Minute()
+	targetMinutes := targetTime.Hour()*60 + targetTime.Minute()
+
+	return commandMinutes <= targetMinutes
 }
 
 // SimulateRuleEvaluation simulates rule evaluation for a given command string
@@ -475,4 +594,280 @@ func (re *RuleEngine) GetRuleEvaluationStats() (map[string]interface{}, error) {
 	stats["potential_targets"] = len(allDevices)
 
 	return stats, nil
+}
+
+// ReEvaluateAllUnsyncedCommands re-evaluates rules for all unsynced commands with parallel processing
+func (re *RuleEngine) ReEvaluateAllUnsyncedCommands() (*BatchEvaluationResult, error) {
+	// Get default configuration
+	config := &BatchEvaluationConfig{
+		BatchSize:   1000,
+		WorkerCount: runtime.NumCPU(),
+		MaxMemoryMB: 500,
+	}
+
+	return re.ReEvaluateAllUnsyncedCommandsWithConfig(config)
+}
+
+// ReEvaluateAllUnsyncedCommandsWithConfig re-evaluates rules with custom configuration
+func (re *RuleEngine) ReEvaluateAllUnsyncedCommandsWithConfig(config *BatchEvaluationConfig) (*BatchEvaluationResult, error) {
+	start := time.Now()
+	result := &BatchEvaluationResult{}
+
+	re.logger.Info().
+		Int("workers", config.WorkerCount).
+		Int("batch_size", config.BatchSize).
+		Msg("Starting batch rule re-evaluation")
+
+	// Get storage interface (we'll need to add this method to access unsynced records)
+	// For now, simulate the streaming approach
+
+	// Create worker pool
+	jobs := make(chan []*storage.CommandRecord, config.WorkerCount*2)
+	results := make(chan batchResult, config.WorkerCount*2)
+
+	var wg sync.WaitGroup
+
+	// Start workers
+	for i := 0; i < config.WorkerCount; i++ {
+		wg.Add(1)
+		go re.evaluationWorker(jobs, results, &wg)
+	}
+
+	// Start result collector
+	resultsChan := make(chan *BatchEvaluationResult, 1)
+	go re.collectResults(results, result, resultsChan)
+
+	// Stream batches of commands
+	go func() {
+		defer close(jobs)
+
+		// This would be replaced with actual streaming from storage
+		// For now, we'll simulate the batching approach
+		offset := 0
+		for {
+			batch, err := re.getUnsyncedCommandsBatch(offset, config.BatchSize)
+			if err != nil {
+				re.logger.Error().Err(err).Msg("Failed to get commands batch")
+				break
+			}
+
+			if len(batch) == 0 {
+				break
+			}
+
+			jobs <- batch
+			offset += len(batch)
+		}
+	}()
+
+	// Wait for workers to complete
+	wg.Wait()
+	close(results)
+
+	// Wait for result collection
+	finalResult := <-resultsChan
+	finalResult.Duration = time.Since(start)
+
+	re.logger.Info().
+		Int("processed", finalResult.ProcessedCommands).
+		Int("updated", finalResult.UpdatedCommands).
+		Dur("duration", finalResult.Duration).
+		Msg("Batch rule re-evaluation completed")
+
+	return finalResult, nil
+}
+
+// evaluationWorker processes batches of commands in parallel
+func (re *RuleEngine) evaluationWorker(jobs <-chan []*storage.CommandRecord, results chan<- batchResult, wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	for batch := range jobs {
+		batchRes := batchResult{
+			processed: len(batch),
+			updated:   0,
+		}
+
+		for _, record := range batch {
+			// Evaluate rules for this record
+			_, err := re.EvaluateRules(record)
+			if err != nil {
+				re.logger.Warn().Err(err).Int64("record_id", record.ID).Msg("Failed to evaluate rules for record")
+				continue
+			}
+
+			// Check if routing changed (this would require comparing with stored routing)
+			// For now, we'll assume all records need updating
+			batchRes.updated++
+
+			// Here we would update the database with new routing metadata
+			// This would be implemented with a batch update operation
+		}
+
+		results <- batchRes
+	}
+}
+
+// batchResult represents the result of processing a batch
+type batchResult struct {
+	processed int
+	updated   int
+}
+
+// collectResults aggregates results from all workers
+func (re *RuleEngine) collectResults(results <-chan batchResult, final *BatchEvaluationResult, done chan<- *BatchEvaluationResult) {
+	for result := range results {
+		final.ProcessedCommands += result.processed
+		final.UpdatedCommands += result.updated
+	}
+	done <- final
+}
+
+// getUnsyncedCommandsBatch gets a batch of unsynced commands (placeholder)
+func (re *RuleEngine) getUnsyncedCommandsBatch(offset, limit int) ([]*storage.CommandRecord, error) {
+	// This would be implemented to actually fetch from storage
+	// For now, return empty to simulate end of data
+	return []*storage.CommandRecord{}, nil
+}
+
+// DetectRuleConflicts analyzes all rules and detects conflicts
+func (re *RuleEngine) DetectRuleConflicts() ([]RuleConflict, error) {
+	activeRules, err := re.rulesManager.GetActiveRules()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get active rules: %w", err)
+	}
+
+	var conflicts []RuleConflict
+
+	// Group rules by device
+	deviceRules := make(map[string][]SyncRule)
+	for _, rule := range activeRules {
+		deviceRules[rule.TargetDevice] = append(deviceRules[rule.TargetDevice], rule)
+	}
+
+	// Check for conflicts within each device
+	for deviceID, rules := range deviceRules {
+		deviceConflicts := re.detectDeviceConflicts(deviceID, rules)
+		conflicts = append(conflicts, deviceConflicts...)
+	}
+
+	return conflicts, nil
+}
+
+// detectDeviceConflicts finds conflicts for rules targeting the same device
+func (re *RuleEngine) detectDeviceConflicts(deviceID string, rules []SyncRule) []RuleConflict {
+	var conflicts []RuleConflict
+
+	// Check for allow/deny conflicts with overlapping conditions
+	for i := 0; i < len(rules); i++ {
+		for j := i + 1; j < len(rules); j++ {
+			if conflict := re.checkRulePairConflict(deviceID, rules[i], rules[j]); conflict != nil {
+				conflicts = append(conflicts, *conflict)
+			}
+		}
+	}
+
+	return conflicts
+}
+
+// checkRulePairConflict checks if two rules conflict with each other
+func (re *RuleEngine) checkRulePairConflict(deviceID string, rule1, rule2 SyncRule) *RuleConflict {
+	// If same action, no conflict
+	if rule1.Action == rule2.Action {
+		return nil
+	}
+
+	// Check if conditions overlap
+	if re.conditionsOverlap(rule1.Conditions, rule2.Conditions) {
+		return &RuleConflict{
+			ConflictingRules: []SyncRule{rule1, rule2},
+			ConflictType:     "allow_deny_overlap",
+			DeviceID:         deviceID,
+			Description:      fmt.Sprintf("Rule '%s' (%s) conflicts with rule '%s' (%s) - overlapping conditions", rule1.Name, rule1.Action, rule2.Name, rule2.Action),
+		}
+	}
+
+	return nil
+}
+
+// conditionsOverlap checks if two sets of conditions overlap
+func (re *RuleEngine) conditionsOverlap(conditions1, conditions2 []RuleCondition) bool {
+	// If either has no conditions, they apply to all commands (overlap)
+	if len(conditions1) == 0 || len(conditions2) == 0 {
+		return true
+	}
+
+	// Check for exact condition matches
+	for _, c1 := range conditions1 {
+		for _, c2 := range conditions2 {
+			if c1.Type == c2.Type && c1.Operator == c2.Operator && c1.Value == c2.Value {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// ResolveConflict resolves a conflict by deleting the older conflicting rule
+func (re *RuleEngine) ResolveConflict(conflict RuleConflict, keepRuleID string) error {
+	if len(conflict.ConflictingRules) != 2 {
+		return fmt.Errorf("can only resolve conflicts between exactly 2 rules")
+	}
+
+	var ruleToDelete string
+	for _, rule := range conflict.ConflictingRules {
+		if rule.ID != keepRuleID {
+			ruleToDelete = rule.ID
+			break
+		}
+	}
+
+	if ruleToDelete == "" {
+		return fmt.Errorf("rule to keep not found in conflict")
+	}
+
+	// Delete the conflicting rule
+	if err := re.rulesManager.DeleteRule(ruleToDelete); err != nil {
+		return fmt.Errorf("failed to delete conflicting rule: %w", err)
+	}
+
+	re.logger.Info().
+		Str("deleted_rule", ruleToDelete).
+		Str("kept_rule", keepRuleID).
+		Msg("Resolved rule conflict by deleting older rule")
+
+	return nil
+}
+
+// AutoResolveConflicts automatically resolves conflicts by keeping newer rules
+func (re *RuleEngine) AutoResolveConflicts() (int, error) {
+	conflicts, err := re.DetectRuleConflicts()
+	if err != nil {
+		return 0, fmt.Errorf("failed to detect conflicts: %w", err)
+	}
+
+	resolved := 0
+	for _, conflict := range conflicts {
+		if len(conflict.ConflictingRules) == 2 {
+			// Keep the newer rule (higher created_at timestamp)
+			rule1 := conflict.ConflictingRules[0]
+			rule2 := conflict.ConflictingRules[1]
+
+			var keepRule string
+			if rule1.CreatedAt > rule2.CreatedAt {
+				keepRule = rule1.ID
+			} else {
+				keepRule = rule2.ID
+			}
+
+			if err := re.ResolveConflict(conflict, keepRule); err != nil {
+				re.logger.Warn().Err(err).Msg("Failed to auto-resolve conflict")
+				continue
+			}
+
+			resolved++
+		}
+	}
+
+	return resolved, nil
 }

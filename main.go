@@ -5237,7 +5237,9 @@ You can create allow or deny rules based on devices and conditions.`,
 	cmd.AddCommand(rulesEnableCmd(cfg))
 	cmd.AddCommand(rulesDisableCmd(cfg))
 	cmd.AddCommand(rulesSimulateCmd(cfg))
-	cmd.AddCommand(rulesTestCmd(cfg))
+	cmd.AddCommand(rulesDiagnosticsCmd(cfg))
+	cmd.AddCommand(rulesConflictsCmd(cfg))
+	cmd.AddCommand(rulesResolveCmd(cfg))
 	cmd.AddCommand(rulesStatusCmd(cfg))
 
 	return cmd
@@ -5330,22 +5332,30 @@ Shows rule information including:
 }
 
 func rulesAllowCmd(cfg *config.Config) *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "allow <device>",
 		Short: "Create allow rule for device",
 		Long: `Create a rule to allow command sync to a specific device.
 
 The device can be specified by device ID or alias.
+Use flags to create conditional rules.
 
 Examples:
   ccr rules allow work-laptop
-  ccr rules allow ccr_a1b2c3d4e5f6`,
+  ccr rules allow work-laptop --tag docker
+  ccr rules allow work-laptop --dir /work
+  ccr rules allow work-laptop --pattern "git*"
+  ccr rules allow work-laptop --time "09:00-17:00"`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			device := args[0]
 
 			verbose, _ := cmd.Flags().GetBool("verbose")
 			noColor, _ := cmd.Flags().GetBool("no-color")
+			tag, _ := cmd.Flags().GetString("tag")
+			dir, _ := cmd.Flags().GetString("dir")
+			pattern, _ := cmd.Flags().GetString("pattern")
+			timeConstraint, _ := cmd.Flags().GetString("time")
 
 			// Create formatter for colored output
 			formatter := output.NewFormatter(cfg)
@@ -5376,8 +5386,46 @@ Examples:
 			syncService := sync.NewSyncService(cfg, storage, authManager)
 			rulesManager := syncService.GetRulesManager()
 
-			// Create allow rule
-			if err := rulesManager.CreateAllowRule(device); err != nil {
+			// Build conditions based on flags
+			var conditions []sync.RuleCondition
+			if tag != "" {
+				conditions = append(conditions, sync.RuleCondition{
+					Type:     "tag",
+					Operator: "equals",
+					Value:    tag,
+				})
+			}
+			if dir != "" {
+				conditions = append(conditions, sync.RuleCondition{
+					Type:     "working_dir",
+					Operator: "starts_with",
+					Value:    dir,
+				})
+			}
+			if pattern != "" {
+				conditions = append(conditions, sync.RuleCondition{
+					Type:     "command_pattern",
+					Operator: "starts_with",
+					Value:    pattern,
+				})
+			}
+			if timeConstraint != "" {
+				conditions = append(conditions, sync.RuleCondition{
+					Type:     "time",
+					Operator: "during",
+					Value:    timeConstraint,
+				})
+			}
+
+			// Create rule
+			var ruleErr error
+			if len(conditions) > 0 {
+				ruleErr = rulesManager.CreateConditionalAllowRule(device, conditions)
+			} else {
+				ruleErr = rulesManager.CreateAllowRule(device)
+			}
+
+			if ruleErr != nil {
 				return fmt.Errorf("failed to create allow rule: %w", err)
 			}
 
@@ -5385,25 +5433,40 @@ Examples:
 			return nil
 		},
 	}
+
+	cmd.Flags().String("tag", "", "Apply rule only to commands with specific tag")
+	cmd.Flags().String("dir", "", "Apply rule only to commands from specific directory")
+	cmd.Flags().String("pattern", "", "Apply rule only to commands matching pattern")
+	cmd.Flags().String("time", "", "Apply rule only during specific time (e.g., '09:00-17:00')")
+
+	return cmd
 }
 
 func rulesDenyCmd(cfg *config.Config) *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "deny <device>",
 		Short: "Create deny rule for device",
 		Long: `Create a rule to deny command sync to a specific device.
 
 The device can be specified by device ID or alias.
+Use flags to create conditional rules.
 
 Examples:
   ccr rules deny personal-phone
-  ccr rules deny ccr_e5f6g7h8i9j0`,
+  ccr rules deny personal-phone --tag sensitive
+  ccr rules deny personal-phone --dir /work
+  ccr rules deny personal-phone --pattern "ssh*"
+  ccr rules deny personal-phone --time "18:00-23:59"`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			device := args[0]
 
 			verbose, _ := cmd.Flags().GetBool("verbose")
 			noColor, _ := cmd.Flags().GetBool("no-color")
+			tag, _ := cmd.Flags().GetString("tag")
+			dir, _ := cmd.Flags().GetString("dir")
+			pattern, _ := cmd.Flags().GetString("pattern")
+			timeConstraint, _ := cmd.Flags().GetString("time")
 
 			// Create formatter for colored output
 			formatter := output.NewFormatter(cfg)
@@ -5434,8 +5497,46 @@ Examples:
 			syncService := sync.NewSyncService(cfg, storage, authManager)
 			rulesManager := syncService.GetRulesManager()
 
-			// Create deny rule
-			if err := rulesManager.CreateDenyRule(device); err != nil {
+			// Build conditions based on flags
+			var conditions []sync.RuleCondition
+			if tag != "" {
+				conditions = append(conditions, sync.RuleCondition{
+					Type:     "tag",
+					Operator: "equals",
+					Value:    tag,
+				})
+			}
+			if dir != "" {
+				conditions = append(conditions, sync.RuleCondition{
+					Type:     "working_dir",
+					Operator: "starts_with",
+					Value:    dir,
+				})
+			}
+			if pattern != "" {
+				conditions = append(conditions, sync.RuleCondition{
+					Type:     "command_pattern",
+					Operator: "starts_with",
+					Value:    pattern,
+				})
+			}
+			if timeConstraint != "" {
+				conditions = append(conditions, sync.RuleCondition{
+					Type:     "time",
+					Operator: "during",
+					Value:    timeConstraint,
+				})
+			}
+
+			// Create rule
+			var ruleErr error
+			if len(conditions) > 0 {
+				ruleErr = rulesManager.CreateConditionalDenyRule(device, conditions)
+			} else {
+				ruleErr = rulesManager.CreateDenyRule(device)
+			}
+
+			if ruleErr != nil {
 				return fmt.Errorf("failed to create deny rule: %w", err)
 			}
 
@@ -5443,6 +5544,13 @@ Examples:
 			return nil
 		},
 	}
+
+	cmd.Flags().String("tag", "", "Apply rule only to commands with specific tag")
+	cmd.Flags().String("dir", "", "Apply rule only to commands from specific directory")
+	cmd.Flags().String("pattern", "", "Apply rule only to commands matching pattern")
+	cmd.Flags().String("time", "", "Apply rule only during specific time (e.g., '18:00-23:59')")
+
+	return cmd
 }
 
 func rulesDeleteCmd(cfg *config.Config) *cobra.Command {
@@ -5678,18 +5786,18 @@ Examples:
 			}
 
 			// Display results
-			formatter.Print("Command: %s", command)
+			formatter.Println("Command: %s", command)
 			if workingDir != "" {
-				formatter.Print("Working Directory: %s", workingDir)
+				formatter.Println("Working Directory: %s", workingDir)
 			}
 			if len(tags) > 0 {
-				formatter.Print("Tags: %s", strings.Join(tags, ", "))
+				formatter.Println("Tags: %s", strings.Join(tags, ", "))
 			}
-			formatter.Print("")
+			formatter.Println("")
 
-			formatter.Print("Would sync to %d device(s):", len(result.TargetDevices))
+			formatter.Println("Would sync to %d device(s):", len(result.TargetDevices))
 			if len(result.TargetDevices) == 0 {
-				formatter.Print("  No devices (command would be local only)")
+				formatter.Println("  No devices (command would be local only)")
 			} else {
 				for _, deviceID := range result.TargetDevices {
 					// Try to get device alias
@@ -5697,25 +5805,25 @@ Examples:
 					if alias, err := deviceAliasManager.GetDeviceAlias(deviceID); err == nil {
 						deviceDisplay = fmt.Sprintf("%s (%s)", alias, deviceID)
 					}
-					formatter.Print("  - %s", deviceDisplay)
+					formatter.Println("  - %s", deviceDisplay)
 				}
 			}
 
 			if len(result.RulesApplied) > 0 {
-				formatter.Print("")
-				formatter.Print("Rules applied: %d", len(result.RulesApplied))
+				formatter.Println("")
+				formatter.Println("Rules applied: %d", len(result.RulesApplied))
 				for _, ruleID := range result.RulesApplied {
-					formatter.Print("  - %s", ruleID[:8])
+					formatter.Println("  - %s", ruleID[:8])
 				}
 			}
 
 			if result.DefaultUsed {
-				formatter.Print("")
+				formatter.Println("")
 				formatter.Info("Using default behavior (no specific rules matched)")
 			}
 
 			if result.Explanation != "" {
-				formatter.Print("")
+				formatter.Println("")
 				formatter.Info("Explanation: %s", result.Explanation)
 			}
 
@@ -5729,7 +5837,141 @@ Examples:
 	return cmd
 }
 
-func rulesTestCmd(cfg *config.Config) *cobra.Command {
+func rulesConflictsCmd(cfg *config.Config) *cobra.Command {
+	return &cobra.Command{
+		Use:   "conflicts",
+		Short: "Detect and show rule conflicts",
+		Long: `Analyze current rules and detect conflicts between them.
+
+Rule conflicts occur when:
+- Allow and deny rules target the same device with overlapping conditions
+- Multiple rules could apply to the same command with different outcomes`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			verbose, _ := cmd.Flags().GetBool("verbose")
+			noColor, _ := cmd.Flags().GetBool("no-color")
+
+			// Create formatter for colored output
+			formatter := output.NewFormatter(cfg)
+			formatter.SetFlags(verbose, false, noColor)
+
+			storage, err := securestorage.NewSecureStorage(&securestorage.StorageOptions{
+				Config:          cfg,
+				CreateIfMissing: false,
+			})
+			if err != nil {
+				return fmt.Errorf("failed to initialize storage: %w", err)
+			}
+			defer storage.Close()
+
+			// Initialize auth manager
+			authManager, err := auth.NewAuthManager(cfg)
+			if err != nil {
+				return fmt.Errorf("failed to initialize auth manager: %w", err)
+			}
+			defer authManager.Close()
+
+			// Check if authenticated
+			if !authManager.IsSessionActive() {
+				return fmt.Errorf("please unlock your storage first with 'ccr unlock'")
+			}
+
+			// Initialize sync service to get rule engine
+			syncService := sync.NewSyncService(cfg, storage, authManager)
+			ruleEngine := syncService.GetRuleEngine()
+
+			// Detect conflicts
+			conflicts, err := ruleEngine.DetectRuleConflicts()
+			if err != nil {
+				return fmt.Errorf("failed to detect conflicts: %w", err)
+			}
+
+			if len(conflicts) == 0 {
+				formatter.Success("No rule conflicts detected")
+				return nil
+			}
+
+			// Display conflicts
+			formatter.Header("Rule Conflicts Detected:")
+			for i, conflict := range conflicts {
+				formatter.Warning("Conflict %d:", i+1)
+				formatter.Println("  Type: %s", conflict.ConflictType)
+				formatter.Println("  Device: %s", conflict.DeviceID)
+				formatter.Println("  Description: %s", conflict.Description)
+				formatter.Println("  Conflicting Rules:")
+				for _, rule := range conflict.ConflictingRules {
+					formatter.Println("    - %s (%s) [%s]", rule.Name, rule.ID[:8], rule.Action)
+				}
+				formatter.Println("")
+			}
+
+			formatter.Tip("Use 'ccr rules resolve <conflict_number>' to resolve conflicts")
+			return nil
+		},
+	}
+}
+
+func rulesResolveCmd(cfg *config.Config) *cobra.Command {
+	return &cobra.Command{
+		Use:   "resolve",
+		Short: "Resolve rule conflicts automatically",
+		Long: `Automatically resolve rule conflicts by keeping newer rules.
+
+This command will:
+1. Detect all current rule conflicts
+2. For each conflict, keep the newer rule (higher timestamp)
+3. Delete the older conflicting rule`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			verbose, _ := cmd.Flags().GetBool("verbose")
+			noColor, _ := cmd.Flags().GetBool("no-color")
+
+			// Create formatter for colored output
+			formatter := output.NewFormatter(cfg)
+			formatter.SetFlags(verbose, false, noColor)
+
+			storage, err := securestorage.NewSecureStorage(&securestorage.StorageOptions{
+				Config:          cfg,
+				CreateIfMissing: false,
+			})
+			if err != nil {
+				return fmt.Errorf("failed to initialize storage: %w", err)
+			}
+			defer storage.Close()
+
+			// Initialize auth manager
+			authManager, err := auth.NewAuthManager(cfg)
+			if err != nil {
+				return fmt.Errorf("failed to initialize auth manager: %w", err)
+			}
+			defer authManager.Close()
+
+			// Check if authenticated
+			if !authManager.IsSessionActive() {
+				return fmt.Errorf("please unlock your storage first with 'ccr unlock'")
+			}
+
+			// Initialize sync service to get rule engine
+			syncService := sync.NewSyncService(cfg, storage, authManager)
+			ruleEngine := syncService.GetRuleEngine()
+
+			// Auto-resolve conflicts
+			resolved, err := ruleEngine.AutoResolveConflicts()
+			if err != nil {
+				return fmt.Errorf("failed to resolve conflicts: %w", err)
+			}
+
+			if resolved == 0 {
+				formatter.Info("No conflicts found to resolve")
+			} else {
+				formatter.Success("Resolved %d rule conflicts", resolved)
+				formatter.Info("Kept newer rules, deleted older conflicting rules")
+			}
+
+			return nil
+		},
+	}
+}
+
+func rulesDiagnosticsCmd(cfg *config.Config) *cobra.Command {
 	return &cobra.Command{
 		Use:   "test",
 		Short: "Test rule system diagnostics",
