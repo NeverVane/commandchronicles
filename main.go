@@ -5031,6 +5031,13 @@ Shows device information including:
 - Last seen timestamp
 - Active status`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			verbose, _ := cmd.Flags().GetBool("verbose")
+			noColor, _ := cmd.Flags().GetBool("no-color")
+
+			// Create formatter for colored output
+			formatter := output.NewFormatter(cfg)
+			formatter.SetFlags(verbose, false, noColor)
+
 			storage, err := securestorage.NewSecureStorage(&securestorage.StorageOptions{
 				Config:          cfg,
 				CreateIfMissing: false,
@@ -5063,12 +5070,12 @@ Shows device information including:
 			}
 
 			if len(devices) == 0 {
-				fmt.Println("No devices found. Run 'ccr sync now' to update device list.")
+				formatter.Info("No devices found. Run 'ccr sync now' to update device list.")
 				return nil
 			}
 
 			// Display devices
-			fmt.Println("Your Devices:")
+			formatter.Header("Your Devices:")
 			for _, device := range devices {
 				status := "active"
 				if !device.IsActive {
@@ -5086,7 +5093,7 @@ Shows device information including:
 				}
 
 				lastSeen := time.Unix(device.LastSeen/1000, 0)
-				fmt.Printf("  %s%s - %s on %s - %s - last seen %s\n",
+				formatter.Print("  %s%s - %s on %s - %s - last seen %s",
 					displayName, currentMark, device.Hostname, device.Platform,
 					status, formatTimeAgo(lastSeen))
 			}
@@ -5112,6 +5119,13 @@ Examples:
 		RunE: func(cmd *cobra.Command, args []string) error {
 			deviceID := args[0]
 			alias := args[1]
+
+			verbose, _ := cmd.Flags().GetBool("verbose")
+			noColor, _ := cmd.Flags().GetBool("no-color")
+
+			// Create formatter for colored output
+			formatter := output.NewFormatter(cfg)
+			formatter.SetFlags(verbose, false, noColor)
 
 			storage, err := securestorage.NewSecureStorage(&securestorage.StorageOptions{
 				Config:          cfg,
@@ -5143,7 +5157,7 @@ Examples:
 				return fmt.Errorf("failed to set device alias: %w", err)
 			}
 
-			fmt.Printf("✓ Set alias '%s' for device %s\n", alias, deviceID)
+			formatter.Success("Set alias '%s' for device %s", alias, deviceID)
 			return nil
 		},
 	}
@@ -5162,6 +5176,13 @@ Example:
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			deviceID := args[0]
+
+			verbose, _ := cmd.Flags().GetBool("verbose")
+			noColor, _ := cmd.Flags().GetBool("no-color")
+
+			// Create formatter for colored output
+			formatter := output.NewFormatter(cfg)
+			formatter.SetFlags(verbose, false, noColor)
 
 			storage, err := securestorage.NewSecureStorage(&securestorage.StorageOptions{
 				Config:          cfg,
@@ -5193,7 +5214,7 @@ Example:
 				return fmt.Errorf("failed to remove device alias: %w", err)
 			}
 
-			fmt.Printf("✓ Removed alias for device %s\n", deviceID)
+			formatter.Success("Removed alias for device %s", deviceID)
 			return nil
 		},
 	}
@@ -5215,6 +5236,8 @@ You can create allow or deny rules based on devices and conditions.`,
 	cmd.AddCommand(rulesDeleteCmd(cfg))
 	cmd.AddCommand(rulesEnableCmd(cfg))
 	cmd.AddCommand(rulesDisableCmd(cfg))
+	cmd.AddCommand(rulesSimulateCmd(cfg))
+	cmd.AddCommand(rulesTestCmd(cfg))
 	cmd.AddCommand(rulesStatusCmd(cfg))
 
 	return cmd
@@ -5232,6 +5255,13 @@ Shows rule information including:
 - Target device
 - Active status`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			verbose, _ := cmd.Flags().GetBool("verbose")
+			noColor, _ := cmd.Flags().GetBool("no-color")
+
+			// Create formatter for colored output
+			formatter := output.NewFormatter(cfg)
+			formatter.SetFlags(verbose, false, noColor)
+
 			storage, err := securestorage.NewSecureStorage(&securestorage.StorageOptions{
 				Config:          cfg,
 				CreateIfMissing: false,
@@ -5264,8 +5294,8 @@ Shows rule information including:
 			}
 
 			if len(rules) == 0 {
-				fmt.Println("No sync rules found.")
-				fmt.Println("Create rules with 'ccr rules allow <device>' or 'ccr rules deny <device>'")
+				formatter.Info("No sync rules found.")
+				formatter.Tip("Create rules with 'ccr rules allow <device>' or 'ccr rules deny <device>'")
 				return nil
 			}
 
@@ -5273,7 +5303,7 @@ Shows rule information including:
 			deviceAliasManager := syncService.GetDeviceAliasManager()
 
 			// Display rules
-			fmt.Println("Sync Rules:")
+			formatter.Header("Sync Rules:")
 			for _, rule := range rules {
 				status := "active"
 				if !rule.Active {
@@ -5286,11 +5316,11 @@ Shows rule information including:
 					deviceDisplay = fmt.Sprintf("%s (%s)", alias, rule.TargetDevice)
 				}
 
-				fmt.Printf("  %s (%s) - %s %s [%s]\n",
+				formatter.Print("  %s (%s) - %s %s [%s]",
 					rule.Name, rule.ID[:8], rule.Action, deviceDisplay, status)
 
 				if rule.Description != "" {
-					fmt.Printf("    %s\n", rule.Description)
+					formatter.Print("    %s", rule.Description)
 				}
 			}
 
@@ -5313,6 +5343,13 @@ Examples:
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			device := args[0]
+
+			verbose, _ := cmd.Flags().GetBool("verbose")
+			noColor, _ := cmd.Flags().GetBool("no-color")
+
+			// Create formatter for colored output
+			formatter := output.NewFormatter(cfg)
+			formatter.SetFlags(verbose, false, noColor)
 
 			storage, err := securestorage.NewSecureStorage(&securestorage.StorageOptions{
 				Config:          cfg,
@@ -5344,7 +5381,7 @@ Examples:
 				return fmt.Errorf("failed to create allow rule: %w", err)
 			}
 
-			fmt.Printf("✓ Created allow rule for device %s\n", device)
+			formatter.Success("Created allow rule for device %s", device)
 			return nil
 		},
 	}
@@ -5364,6 +5401,13 @@ Examples:
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			device := args[0]
+
+			verbose, _ := cmd.Flags().GetBool("verbose")
+			noColor, _ := cmd.Flags().GetBool("no-color")
+
+			// Create formatter for colored output
+			formatter := output.NewFormatter(cfg)
+			formatter.SetFlags(verbose, false, noColor)
 
 			storage, err := securestorage.NewSecureStorage(&securestorage.StorageOptions{
 				Config:          cfg,
@@ -5395,7 +5439,7 @@ Examples:
 				return fmt.Errorf("failed to create deny rule: %w", err)
 			}
 
-			fmt.Printf("✓ Created deny rule for device %s\n", device)
+			formatter.Success("Created deny rule for device %s", device)
 			return nil
 		},
 	}
@@ -5414,6 +5458,13 @@ Example:
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ruleID := args[0]
+
+			verbose, _ := cmd.Flags().GetBool("verbose")
+			noColor, _ := cmd.Flags().GetBool("no-color")
+
+			// Create formatter for colored output
+			formatter := output.NewFormatter(cfg)
+			formatter.SetFlags(verbose, false, noColor)
 
 			storage, err := securestorage.NewSecureStorage(&securestorage.StorageOptions{
 				Config:          cfg,
@@ -5445,7 +5496,7 @@ Example:
 				return fmt.Errorf("failed to delete rule: %w", err)
 			}
 
-			fmt.Printf("✓ Deleted rule %s\n", ruleID)
+			formatter.Success("Deleted rule %s", ruleID)
 			return nil
 		},
 	}
@@ -5464,6 +5515,13 @@ Example:
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ruleID := args[0]
+
+			verbose, _ := cmd.Flags().GetBool("verbose")
+			noColor, _ := cmd.Flags().GetBool("no-color")
+
+			// Create formatter for colored output
+			formatter := output.NewFormatter(cfg)
+			formatter.SetFlags(verbose, false, noColor)
 
 			storage, err := securestorage.NewSecureStorage(&securestorage.StorageOptions{
 				Config:          cfg,
@@ -5495,7 +5553,7 @@ Example:
 				return fmt.Errorf("failed to enable rule: %w", err)
 			}
 
-			fmt.Printf("✓ Enabled rule %s\n", ruleID)
+			formatter.Success("Enabled rule %s", ruleID)
 			return nil
 		},
 	}
@@ -5514,6 +5572,13 @@ Example:
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ruleID := args[0]
+
+			verbose, _ := cmd.Flags().GetBool("verbose")
+			noColor, _ := cmd.Flags().GetBool("no-color")
+
+			// Create formatter for colored output
+			formatter := output.NewFormatter(cfg)
+			formatter.SetFlags(verbose, false, noColor)
 
 			storage, err := securestorage.NewSecureStorage(&securestorage.StorageOptions{
 				Config:          cfg,
@@ -5545,7 +5610,241 @@ Example:
 				return fmt.Errorf("failed to disable rule: %w", err)
 			}
 
-			fmt.Printf("✓ Disabled rule %s\n", ruleID)
+			formatter.Success("Disabled rule %s", ruleID)
+			return nil
+		},
+	}
+}
+
+func rulesSimulateCmd(cfg *config.Config) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "simulate <command>",
+		Short: "Simulate rule evaluation for a command",
+		Long: `Test how sync rules would be applied to a specific command.
+
+This shows which devices the command would be synced to based on current rules.
+
+Examples:
+  ccr rules simulate "docker ps"
+  ccr rules simulate "git status" --dir /work
+  ccr rules simulate "npm install" --tag nodejs`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			command := args[0]
+			workingDir, _ := cmd.Flags().GetString("dir")
+			tagStr, _ := cmd.Flags().GetString("tag")
+			verbose, _ := cmd.Flags().GetBool("verbose")
+			noColor, _ := cmd.Flags().GetBool("no-color")
+
+			// Create formatter for colored output
+			formatter := output.NewFormatter(cfg)
+			formatter.SetFlags(verbose, false, noColor)
+
+			var tags []string
+			if tagStr != "" {
+				tags = []string{tagStr}
+			}
+
+			storage, err := securestorage.NewSecureStorage(&securestorage.StorageOptions{
+				Config:          cfg,
+				CreateIfMissing: false,
+			})
+			if err != nil {
+				return fmt.Errorf("failed to initialize storage: %w", err)
+			}
+			defer storage.Close()
+
+			// Initialize auth manager
+			authManager, err := auth.NewAuthManager(cfg)
+			if err != nil {
+				return fmt.Errorf("failed to initialize auth manager: %w", err)
+			}
+			defer authManager.Close()
+
+			// Check if authenticated
+			if !authManager.IsSessionActive() {
+				return fmt.Errorf("please unlock your storage first with 'ccr unlock'")
+			}
+
+			// Initialize sync service to get rule engine
+			syncService := sync.NewSyncService(cfg, storage, authManager)
+			ruleEngine := syncService.GetRuleEngine()
+			deviceAliasManager := syncService.GetDeviceAliasManager()
+
+			// Simulate rule evaluation
+			result, err := ruleEngine.SimulateRuleEvaluation(command, workingDir, tags)
+			if err != nil {
+				return fmt.Errorf("failed to simulate rule evaluation: %w", err)
+			}
+
+			// Display results
+			formatter.Print("Command: %s", command)
+			if workingDir != "" {
+				formatter.Print("Working Directory: %s", workingDir)
+			}
+			if len(tags) > 0 {
+				formatter.Print("Tags: %s", strings.Join(tags, ", "))
+			}
+			formatter.Print("")
+
+			formatter.Print("Would sync to %d device(s):", len(result.TargetDevices))
+			if len(result.TargetDevices) == 0 {
+				formatter.Print("  No devices (command would be local only)")
+			} else {
+				for _, deviceID := range result.TargetDevices {
+					// Try to get device alias
+					deviceDisplay := deviceID
+					if alias, err := deviceAliasManager.GetDeviceAlias(deviceID); err == nil {
+						deviceDisplay = fmt.Sprintf("%s (%s)", alias, deviceID)
+					}
+					formatter.Print("  - %s", deviceDisplay)
+				}
+			}
+
+			if len(result.RulesApplied) > 0 {
+				formatter.Print("")
+				formatter.Print("Rules applied: %d", len(result.RulesApplied))
+				for _, ruleID := range result.RulesApplied {
+					formatter.Print("  - %s", ruleID[:8])
+				}
+			}
+
+			if result.DefaultUsed {
+				formatter.Print("")
+				formatter.Info("Using default behavior (no specific rules matched)")
+			}
+
+			if result.Explanation != "" {
+				formatter.Print("")
+				formatter.Info("Explanation: %s", result.Explanation)
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().String("dir", "", "Working directory for simulation")
+	cmd.Flags().String("tag", "", "Tag for simulation")
+
+	return cmd
+}
+
+func rulesTestCmd(cfg *config.Config) *cobra.Command {
+	return &cobra.Command{
+		Use:   "test",
+		Short: "Test rule system diagnostics",
+		Long: `Run comprehensive diagnostics on the sync rules system.
+
+This command analyzes the current rule configuration, validates rule logic,
+and provides detailed information about how rules would be applied.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			verbose, _ := cmd.Flags().GetBool("verbose")
+			noColor, _ := cmd.Flags().GetBool("no-color")
+
+			// Create formatter for colored output
+			formatter := output.NewFormatter(cfg)
+			formatter.SetFlags(verbose, false, noColor)
+
+			storage, err := securestorage.NewSecureStorage(&securestorage.StorageOptions{
+				Config:          cfg,
+				CreateIfMissing: false,
+			})
+			if err != nil {
+				return fmt.Errorf("failed to initialize storage: %w", err)
+			}
+			defer storage.Close()
+
+			// Initialize auth manager
+			authManager, err := auth.NewAuthManager(cfg)
+			if err != nil {
+				return fmt.Errorf("failed to initialize auth manager: %w", err)
+			}
+			defer authManager.Close()
+
+			// Check if authenticated
+			if !authManager.IsSessionActive() {
+				return fmt.Errorf("please unlock your storage first with 'ccr unlock'")
+			}
+
+			// Initialize sync service to get rule engine
+			syncService := sync.NewSyncService(cfg, storage, authManager)
+			ruleEngine := syncService.GetRuleEngine()
+
+			formatter.Header("Sync Rules System Diagnostics")
+			formatter.Print("")
+
+			// Get evaluation diagnostics
+			diagnostics, err := ruleEngine.GetEvaluationDiagnostics()
+			if err != nil {
+				return fmt.Errorf("failed to get diagnostics: %w", err)
+			}
+
+			// Display basic information
+			formatter.Println("Has Rules: %v", diagnostics["has_rules"])
+			formatter.Println("Total Devices: %v", diagnostics["total_devices"])
+			formatter.Println("Active Devices: %v", diagnostics["active_devices"])
+
+			if diagnostics["has_rules"].(bool) {
+				if summary, ok := diagnostics["rules_summary"]; ok {
+					formatter.Print("")
+					formatter.Stats("Rules Summary:")
+					formatter.Println("  Total: %v", summary.(*sync.RuleSummary).TotalRules)
+					formatter.Println("  Active: %v", summary.(*sync.RuleSummary).ActiveRules)
+					formatter.Println("  Allow: %v", summary.(*sync.RuleSummary).AllowRules)
+					formatter.Println("  Deny: %v", summary.(*sync.RuleSummary).DenyRules)
+				}
+
+				// Show rule evaluation stats
+				stats, err := ruleEngine.GetRuleEvaluationStats()
+				if err != nil {
+					formatter.Warning("Could not get evaluation stats: %v", err)
+				} else {
+					formatter.Print("")
+					formatter.Stats("Rule Distribution:")
+					if actionDist, ok := stats["action_distribution"].(map[string]int); ok {
+						for action, count := range actionDist {
+							formatter.Println("  %s rules: %d", action, count)
+						}
+					}
+				}
+			}
+
+			// Show warnings
+			if warnings, ok := diagnostics["rule_warnings"].([]string); ok && len(warnings) > 0 {
+				formatter.Print("")
+				formatter.Warning("Rule Warnings:")
+				for _, warning := range warnings {
+					formatter.Println("  - %s", warning)
+				}
+			} else {
+				formatter.Success("No rule conflicts detected")
+			}
+
+			// Test basic rule evaluation functionality
+			formatter.Separator()
+			formatter.Stats("Rule Evaluation Test:")
+			result, err := ruleEngine.SimulateRuleEvaluation("test-command", "", []string{})
+			if err != nil {
+				formatter.Error("Error testing rule evaluation: %v", err)
+			} else {
+				message := fmt.Sprintf("Test command would sync to %d device(s)", len(result.TargetDevices))
+				if result.DefaultUsed {
+					message += " (using default behavior)"
+				}
+				formatter.Println(message)
+			}
+
+			formatter.Separator()
+			formatter.Stats("System Status:")
+			if diagnostics["total_devices"].(int) == 0 {
+				formatter.Info("No devices found. Run 'ccr sync now' to populate device list.")
+			}
+
+			if !diagnostics["has_rules"].(bool) {
+				formatter.Info("No rules configured. All commands will sync to all devices by default.")
+				formatter.Tip("Create rules with: ccr rules allow <device> or ccr rules deny <device>")
+			}
+
 			return nil
 		},
 	}
@@ -5557,6 +5856,13 @@ func rulesStatusCmd(cfg *config.Config) *cobra.Command {
 		Short: "Show rules summary",
 		Long:  `Display a summary of all sync rules and their current status.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			verbose, _ := cmd.Flags().GetBool("verbose")
+			noColor, _ := cmd.Flags().GetBool("no-color")
+
+			// Create formatter for colored output
+			formatter := output.NewFormatter(cfg)
+			formatter.SetFlags(verbose, false, noColor)
+
 			storage, err := securestorage.NewSecureStorage(&securestorage.StorageOptions{
 				Config:          cfg,
 				CreateIfMissing: false,
@@ -5589,15 +5895,16 @@ func rulesStatusCmd(cfg *config.Config) *cobra.Command {
 			}
 
 			// Display summary
-			fmt.Println("Sync Rules Summary:")
-			fmt.Printf("  Total rules: %d\n", summary.TotalRules)
-			fmt.Printf("  Active rules: %d\n", summary.ActiveRules)
-			fmt.Printf("  Allow rules: %d\n", summary.AllowRules)
-			fmt.Printf("  Deny rules: %d\n", summary.DenyRules)
+			formatter.Header("Sync Rules Summary:")
+			formatter.Println("  Total rules: %d", summary.TotalRules)
+			formatter.Println("  Active rules: %d", summary.ActiveRules)
+			formatter.Println("  Allow rules: %d", summary.AllowRules)
+			formatter.Println("  Deny rules: %d", summary.DenyRules)
 
 			if summary.TotalRules == 0 {
-				fmt.Println("\nNo rules configured. Commands will sync to all devices by default.")
-				fmt.Println("Create rules with 'ccr rules allow <device>' or 'ccr rules deny <device>'")
+				formatter.Separator()
+				formatter.Info("No rules configured. Commands will sync to all devices by default.")
+				formatter.Tip("Create rules with 'ccr rules allow <device>' or 'ccr rules deny <device>'")
 			}
 
 			return nil

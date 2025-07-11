@@ -106,11 +106,12 @@ type SyncUploadRequest struct {
 }
 
 type SyncRecord struct {
-	RecordHash       string `json:"record_hash"`
-	EncryptedPayload []byte `json:"encrypted_payload"`
-	TimestampMs      int64  `json:"timestamp_ms"`
-	Hostname         string `json:"hostname"`
-	SessionID        string `json:"session_id"`
+	RecordHash       string   `json:"record_hash"`
+	EncryptedPayload []byte   `json:"encrypted_payload"`
+	TimestampMs      int64    `json:"timestamp_ms"`
+	Hostname         string   `json:"hostname"`
+	SessionID        string   `json:"session_id"`
+	TargetDevices    []string `json:"target_devices,omitempty"` // Routing metadata
 }
 
 type SyncMetadata struct {

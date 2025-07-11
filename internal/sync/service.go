@@ -30,6 +30,7 @@ type SyncService struct {
 	deviceManager      *DeviceManager
 	deviceAliasManager *DeviceAliasManager
 	rulesManager       *RulesManager
+	ruleEngine         *RuleEngine
 	hashGenerator      *HashGenerator
 	encryptor          *crypto.Encryptor
 
@@ -108,6 +109,7 @@ func NewSyncService(cfg *config.Config, storage *securestorage.SecureStorage, lo
 	deviceManager := NewDeviceManager(cfg)
 	deviceAliasManager := NewDeviceAliasManager(storage, cfg)
 	rulesManager := NewRulesManager(storage, cfg, deviceAliasManager)
+	ruleEngine := NewRuleEngine(rulesManager, deviceAliasManager)
 	hashGenerator := NewHashGenerator()
 
 	service := &SyncService{
@@ -122,6 +124,7 @@ func NewSyncService(cfg *config.Config, storage *securestorage.SecureStorage, lo
 		deviceManager:      deviceManager,
 		deviceAliasManager: deviceAliasManager,
 		rulesManager:       rulesManager,
+		ruleEngine:         ruleEngine,
 		hashGenerator:      hashGenerator,
 		encryptor:          crypto.NewEncryptor(),
 		lastSyncTime:       0,
@@ -283,12 +286,29 @@ func (s *SyncService) UploadNewRecords() error {
 			return fmt.Errorf("failed to encrypt record: %w", err)
 		}
 
+		// Evaluate rules to determine target devices
+		ruleEvaluation, err := s.ruleEngine.EvaluateRules(record)
+		if err != nil {
+			s.logger.Warn().Err(err).Int64("record_id", record.ID).Msg("Failed to evaluate rules, using default targets")
+			// Fallback to default behavior (all devices)
+			ruleEvaluation, _ = s.ruleEngine.GetDefaultTargets()
+		}
+
+		s.logger.Debug().
+			Int64("record_id", record.ID).
+			Strs("target_devices", ruleEvaluation.TargetDevices).
+			Strs("rules_applied", ruleEvaluation.RulesApplied).
+			Bool("default_used", ruleEvaluation.DefaultUsed).
+			Str("explanation", ruleEvaluation.Explanation).
+			Msg("Rule evaluation completed for record")
+
 		syncRecords[i] = SyncRecord{
 			RecordHash:       recordHash,
 			EncryptedPayload: encryptedPayload,
 			TimestampMs:      record.Timestamp,
 			Hostname:         record.Hostname,
 			SessionID:        record.SessionID,
+			TargetDevices:    ruleEvaluation.TargetDevices,
 		}
 	}
 
@@ -1800,4 +1820,9 @@ func (s *SyncService) GetDeviceAliasManager() *DeviceAliasManager {
 // GetRulesManager returns the rules manager
 func (s *SyncService) GetRulesManager() *RulesManager {
 	return s.rulesManager
+}
+
+// GetRuleEngine returns the rule engine
+func (s *SyncService) GetRuleEngine() *RuleEngine {
+	return s.ruleEngine
 }
