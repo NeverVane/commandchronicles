@@ -206,8 +206,7 @@ type SyncConfig struct {
 	// Enable conflict resolution
 	ConflictResolution bool `toml:"conflict_resolution"`
 
-	// Perfect Sync options
-	PerfectSync             bool `toml:"perfect_sync"`
+	// Integrity verification options
 	IntegrityVerification   bool `toml:"integrity_verification"`
 	HashCompression         bool `toml:"hash_compression"`
 	MaxHashesPerRequest     int  `toml:"max_hashes_per_request"`
@@ -402,16 +401,16 @@ func DefaultConfig() *Config {
 			SupportedFormats: []string{"bash", "zsh", "fish", "json"},
 		},
 		Sync: SyncConfig{
-			Enabled:                 false, // Disabled by default
-			ServerURL:               "",
-			Email:                   "",
-			SyncInterval:            300, // 5 minutes
-			MaxRetries:              3,
-			Timeout:                 30, // 30 seconds
-			BatchSize:               100,
-			AutoSync:                false,
-			ConflictResolution:      true,
-			PerfectSync:             true,
+			Enabled:            false, // Disabled by default
+			ServerURL:          "",
+			Email:              "",
+			SyncInterval:       300, // 5 minutes
+			MaxRetries:         3,
+			Timeout:            30, // 30 seconds
+			BatchSize:          100,
+			AutoSync:           false,
+			ConflictResolution: true,
+
 			IntegrityVerification:   true,
 			HashCompression:         true,
 			MaxHashesPerRequest:     10000,
@@ -852,11 +851,6 @@ func (c *Config) GetIntegrityCheckFrequencyDuration() time.Duration {
 // GetHashCollectionTimeoutDuration returns the hash collection timeout as a time.Duration
 func (c *Config) GetHashCollectionTimeoutDuration() time.Duration {
 	return time.Duration(c.Sync.HashCollectionTimeout) * time.Second
-}
-
-// IsPerfectSyncEnabled returns true if Perfect Sync is enabled and properly configured
-func (c *Config) IsPerfectSyncEnabled() bool {
-	return c.Sync.Enabled && c.Sync.PerfectSync
 }
 
 // ShouldUseIntegrityVerification returns true if integrity verification should be used

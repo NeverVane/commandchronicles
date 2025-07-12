@@ -1159,10 +1159,6 @@ func (s *SyncService) GetRemoteAuth() *RemoteAuthenticator {
 
 // PerformIntegritySync performs Perfect Sync using hash-based integrity verification with comprehensive error handling
 func (s *SyncService) PerformIntegritySync() error {
-	if !s.config.IsPerfectSyncEnabled() {
-		s.logger.Debug().Msg("Perfect Sync not enabled, falling back to regular sync")
-		return s.PerformSync()
-	}
 
 	if s.isRunning {
 		return NewSyncError(ErrTypeResourceExhausted, "sync is already in progress", "SYNC_IN_PROGRESS", false, nil)

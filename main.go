@@ -3633,23 +3633,13 @@ func syncNowCmd(cfg *config.Config) *cobra.Command {
 				formatter.Success("Connection test successful")
 			})
 
-			// Perform sync using Perfect Sync if enabled
-			if cfg.IsPerfectSyncEnabled() {
-				formatter.IfVerbose(func() {
-					formatter.Info("Performing integrity sync...")
-				})
-				if err := syncService.PerformIntegritySync(); err != nil {
-					formatter.Error("Sync failed")
-					return fmt.Errorf("sync failed: %w", err)
-				}
-			} else {
-				formatter.IfVerbose(func() {
-					formatter.Info("Performing sync...")
-				})
-				if err := syncService.PerformSync(); err != nil {
-					formatter.Error("Sync failed")
-					return fmt.Errorf("sync failed: %w", err)
-				}
+			// Perform sync using Perfect Sync
+			formatter.IfVerbose(func() {
+				formatter.Info("Performing integrity sync...")
+			})
+			if err := syncService.PerformIntegritySync(); err != nil {
+				formatter.Error("Sync failed")
+				return fmt.Errorf("sync failed: %w", err)
 			}
 			formatter.Success("Sync completed successfully")
 
@@ -5074,28 +5064,97 @@ Shows device information including:
 				return nil
 			}
 
-			// Display devices
+			// Display devices in a formatted table
 			formatter.Header("Your Devices:")
+
+			// Calculate column widths for proper alignment
+			maxNameWidth := 12    // minimum width for "NAME/ALIAS" header
+			maxHostnameWidth := 8 // minimum width for "HOSTNAME" header
+			maxPlatformWidth := 8 // minimum width for "PLATFORM" header
+
+			// Find maximum widths
 			for _, device := range devices {
-				status := "active"
+				displayName := device.DeviceID
+				if device.Alias != "" && device.IsEnabled {
+					displayName = device.Alias
+				}
+				if device.IsCurrent {
+					displayName += " *"
+				}
+
+				if len(displayName) > maxNameWidth {
+					maxNameWidth = len(displayName)
+				}
+				if len(device.Hostname) > maxHostnameWidth {
+					maxHostnameWidth = len(device.Hostname)
+				}
+				if len(device.Platform) > maxPlatformWidth {
+					maxPlatformWidth = len(device.Platform)
+				}
+			}
+
+			// Print table header
+			headerFormat := fmt.Sprintf("  %%-%ds  %%-%ds  %%-%ds  %%-8s  %%s\n",
+				maxNameWidth, maxHostnameWidth, maxPlatformWidth)
+			formatter.Print(headerFormat, "NAME/ALIAS", "HOSTNAME", "PLATFORM", "STATUS", "LAST SEEN")
+
+			// Print separator line
+			separator := fmt.Sprintf("  %s  %s  %s  %s  %s\n",
+				strings.Repeat("-", maxNameWidth),
+				strings.Repeat("-", maxHostnameWidth),
+				strings.Repeat("-", maxPlatformWidth),
+				"--------",
+				"---------")
+			formatter.Print(separator)
+
+			// Print device rows
+
+			for _, device := range devices {
+				status := formatter.Colorize("active", output.StatusSuccess)
 				if !device.IsActive {
-					status = "inactive"
+					status = formatter.Colorize("inactive", output.StatusWarning)
 				}
 
 				displayName := device.DeviceID
 				if device.Alias != "" && device.IsEnabled {
-					displayName = fmt.Sprintf("%s (%s)", device.Alias, device.DeviceID)
+					displayName = device.Alias
 				}
 
-				currentMark := ""
+				// Add current device indicator (without color for width calculation)
 				if device.IsCurrent {
-					currentMark = " [current]"
+					displayName += " *"
 				}
 
 				lastSeen := time.Unix(device.LastSeen/1000, 0)
-				formatter.Print("  %s%s - %s on %s - %s - last seen %s",
-					displayName, currentMark, device.Hostname, device.Platform,
-					status, formatTimeAgo(lastSeen))
+				lastSeenStr := formatTimeAgo(lastSeen)
+
+				// Manually pad the display name to ensure proper alignment
+				// (color codes interfere with printf padding)
+				paddedDisplayName := fmt.Sprintf("%-*s", maxNameWidth, displayName)
+
+				// Apply color formatting to the padded name if current device
+				finalDisplayName := paddedDisplayName
+				if device.IsCurrent {
+					finalDisplayName = formatter.Colorize(paddedDisplayName, output.StatusInfo)
+				}
+
+				formatter.Print("  %s  %-*s  %-*s  %-8s  %s\n",
+					finalDisplayName,
+					maxHostnameWidth, device.Hostname,
+					maxPlatformWidth, device.Platform,
+					status, lastSeenStr)
+			}
+
+			formatter.Println("")
+			if hasCurrentDevice := func() bool {
+				for _, device := range devices {
+					if device.IsCurrent {
+						return true
+					}
+				}
+				return false
+			}(); hasCurrentDevice {
+				formatter.Info("* indicates current device")
 			}
 
 			return nil
@@ -5304,27 +5363,88 @@ Shows rule information including:
 			// Get device alias manager for resolving device names
 			deviceAliasManager := syncService.GetDeviceAliasManager()
 
-			// Display rules
+			// Display rules in a formatted table
 			formatter.Header("Sync Rules:")
+
+			// Calculate column widths for proper alignment
+			maxNameWidth := 9   // minimum width for "RULE NAME" header
+			maxIDWidth := 8     // fixed width for "RULE ID" (8 chars)
+			maxActionWidth := 6 // minimum width for "ACTION" header
+			maxTargetWidth := 6 // minimum width for "TARGET" header
+			maxStatusWidth := 6 // minimum width for "STATUS" header
+
+			// First pass: calculate maximum widths
 			for _, rule := range rules {
-				status := "active"
+				if len(rule.Name) > maxNameWidth {
+					maxNameWidth = len(rule.Name)
+				}
+				if len(rule.Action) > maxActionWidth {
+					maxActionWidth = len(rule.Action)
+				}
+
+				// Try to get device alias for width calculation
+				deviceDisplay := rule.TargetDevice
+				if alias, err := deviceAliasManager.GetDeviceAlias(rule.TargetDevice); err == nil {
+					deviceDisplay = alias
+				}
+				if len(deviceDisplay) > maxTargetWidth {
+					maxTargetWidth = len(deviceDisplay)
+				}
+			}
+
+			// Print table header
+			headerFormat := fmt.Sprintf("  %%-%ds  %%-%ds  %%-%ds  %%-%ds  %%-%ds  %%s\n",
+				maxNameWidth, maxIDWidth, maxActionWidth, maxTargetWidth, maxStatusWidth)
+			formatter.Print(headerFormat, "RULE NAME", "RULE ID", "ACTION", "TARGET", "STATUS", "CONDITIONS")
+
+			// Print separator line
+			separator := fmt.Sprintf("  %s  %s  %s  %s  %s  %s\n",
+				strings.Repeat("-", maxNameWidth),
+				strings.Repeat("-", maxIDWidth),
+				strings.Repeat("-", maxActionWidth),
+				strings.Repeat("-", maxTargetWidth),
+				strings.Repeat("-", maxStatusWidth),
+				strings.Repeat("-", 10))
+			formatter.Print(separator)
+
+			// Print rule rows
+			rowFormat := fmt.Sprintf("  %%-%ds  %%-%ds  %%-%ds  %%-%ds  %%-%ds  %%s\n",
+				maxNameWidth, maxIDWidth, maxActionWidth, maxTargetWidth, maxStatusWidth)
+
+			for _, rule := range rules {
+				status := formatter.Colorize("active", output.StatusSuccess)
 				if !rule.Active {
-					status = "inactive"
+					status = formatter.Colorize("inactive", output.StatusWarning)
 				}
 
 				// Try to get device alias
 				deviceDisplay := rule.TargetDevice
 				if alias, err := deviceAliasManager.GetDeviceAlias(rule.TargetDevice); err == nil {
-					deviceDisplay = fmt.Sprintf("%s (%s)", alias, rule.TargetDevice)
+					deviceDisplay = alias
 				}
 
-				formatter.Print("  %s (%s) - %s %s [%s]",
-					rule.Name, rule.ID[:8], rule.Action, deviceDisplay, status)
-
-				if rule.Description != "" {
-					formatter.Print("    %s", rule.Description)
+				// Color the action
+				action := rule.Action
+				if rule.Action == "allow" {
+					action = formatter.Colorize(rule.Action, output.StatusSuccess)
+				} else if rule.Action == "deny" {
+					action = formatter.Colorize(rule.Action, output.StatusWarning)
 				}
+
+				// Build conditions string
+				conditions := "none"
+				if len(rule.Conditions) > 0 {
+					conditionStrings := make([]string, len(rule.Conditions))
+					for i, condition := range rule.Conditions {
+						conditionStrings[i] = fmt.Sprintf("%s:%s", condition.Type, condition.Value)
+					}
+					conditions = strings.Join(conditionStrings, ", ")
+				}
+
+				formatter.Print(rowFormat, rule.Name, rule.ID[:8], action, deviceDisplay, status, conditions)
 			}
+
+			formatter.Println("")
 
 			return nil
 		},
