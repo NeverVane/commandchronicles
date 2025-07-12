@@ -2,7 +2,7 @@
 
 ```
 ===================================================================
-                CommandChronicles CLI (ccr) v0.3.1
+                CommandChronicles CLI (ccr) v0.4.0
 ===================================================================
 
   🚀 A modern shell history management tool that supercharges
@@ -14,7 +14,7 @@
 
 <p align="center">
   <a href="https://github.com/NeverVane/commandchronicles/releases">
-    <img src="https://img.shields.io/badge/version-0.3.1-blue.svg" alt="Version">
+    <img src="https://img.shields.io/badge/version-0.4.0-blue.svg" alt="Version">
   </a>
   <a href="LICENSE">
     <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License">
@@ -32,6 +32,7 @@
 - 🔍 **Blazing-fast fuzzy search** with real-time interactive TUI (Ctrl+R)
 - 📝 **Rich note system** for annotating commands with context and explanations
 - 🏷️ **Comprehensive tag system** for categorizing and organizing commands with visual indicators
+- 🔗 **Sync rules system** for fine-grained control over command synchronization across devices
 - 📊 **Rich command metadata** (exit codes, duration, working directory, git info)
 - 🐚 **Seamless shell integration** for bash and zsh with automatic setup
 - 🔑 **Secure key derivation** (Argon2id) and session management
@@ -224,7 +225,65 @@ ccr tag search "docker"
 - Tags are preserved during search and filtering operations
 - Color-coded organization for quick visual categorization
 
+### Sync Rules System
+
+CommandChronicles includes a powerful sync rules system that gives you fine-grained control over which commands synchronize to which devices. Create rules to selectively include or exclude commands from specific devices based on flexible conditions.
+
+```bash
+# List your devices
+ccr devices show
+
+# Create basic rules
+ccr rules allow work-laptop                    # Allow all commands to work laptop
+ccr rules deny personal-phone                  # Deny all commands to phone
+
+# Create conditional rules
+ccr rules deny personal-phone --tag sensitive  # Deny sensitive commands to phone
+ccr rules allow home-server --dir /projects    # Only sync /projects commands to server
+ccr rules allow dev-machine --pattern "git*"   # Only sync git commands to dev machine
+
+# Manage rules
+ccr rules list                    # View all rules
+ccr rules delete <rule-id>        # Delete a rule (supports 8-char IDs)
+ccr rules simulate "git push"     # Test how rules would apply to a command
+ccr rules conflicts               # Detect rule conflicts
+```
+
+**Sync Rules Features:**
+- **Privacy Control**: Exclude personal/sensitive commands from work devices
+- **Device-Specific Workflows**: Only sync relevant commands to each device
+- **Conditional Filtering**: Apply rules based on tags, directories, command patterns, or time
+- **Retroactive Application**: Rules automatically apply to all existing commands, not just new ones
+- **Allow/Deny Logic**: Flexible rule combinations for precise control
+- **Device Aliases**: Use friendly names instead of device IDs
+
+**Rule Conditions:**
+- **Tags**: `--tag docker` (commands with specific tags)
+- **Directories**: `--dir /work` (commands from specific paths)
+- **Patterns**: `--pattern "ssh*"` (commands matching patterns)
+- **Time**: `--time "09:00-17:00"` (commands during specific hours)
+
+**How It Works:**
+Rules use **allow/deny logic** with **target devices**. When rules change, **all existing commands are automatically re-evaluated** and routing is updated across your devices. No rules means all commands sync everywhere (default behavior).
+
+**Example Use Cases:**
+- **Work/Personal Separation**: `ccr rules deny personal-laptop --tag work`
+- **Server Deployments**: `ccr rules allow production-server --tag deploy`
+- **Development Focus**: `ccr rules allow dev-machine --dir /code`
+- **Time-Based Rules**: `ccr rules deny mobile --time "09:00-17:00"`
+
 ## 📋 Quick Reference
+
+### Sync Rules Commands
+```bash
+ccr devices show                    # List available devices
+ccr rules list                     # List all sync rules
+ccr rules allow <device>            # Allow all commands to device
+ccr rules deny <device>             # Deny all commands to device
+ccr rules delete <rule-id>          # Delete a rule
+ccr rules simulate <command>        # Test rule evaluation
+ccr rules conflicts                 # Check for rule conflicts
+```
 
 ### Tag Commands
 ```bash
@@ -339,7 +398,7 @@ CommandChronicles takes your privacy seriously:
 
 ## 🎯 Use Cases
 
-CommandChronicles with notes and tags is perfect for:
+CommandChronicles with notes, tags, and sync rules is perfect for:
 
 - **DevOps workflows**: Document deployment commands with environment details and tag by environment
 - **Complex commands**: Add context to long docker, kubectl, or database commands with explanatory notes
@@ -352,6 +411,12 @@ CommandChronicles with notes and tags is perfect for:
 - **Workflow optimization**: Create searchable command libraries organized by function and context
 - **Environment management**: Tag commands by deployment environment (dev, staging, prod)
 - **Technology discovery**: Browse related commands through consistent tagging conventions
+- **Multi-device privacy**: Use sync rules to keep personal commands off work devices and vice versa
+- **Role-based access**: Allow only deployment commands to production servers with targeted rules
+- **Development workflows**: Sync coding commands to dev machines while filtering system admin tasks
+- **Time-sensitive filtering**: Use time-based rules to prevent work commands from syncing during personal hours
+- **Project isolation**: Route project-specific commands only to relevant development environments
+- **Security compliance**: Ensure sensitive operations never sync to unauthorized or mobile devices
 
 ## 🤝 Contributing
 
