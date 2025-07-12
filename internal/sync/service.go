@@ -1187,6 +1187,11 @@ func (s *SyncService) PerformIntegritySync() error {
 	classifier := NewErrorClassifier()
 	retryStrategy := DefaultRetryStrategy()
 
+	// Update device list during sync
+	if err := s.updateDevicesList(); err != nil {
+		s.logger.Warn().Err(err).Msg("Failed to update devices list during Perfect Sync")
+	}
+
 	// STEP 1: Upload local changes first (CRITICAL FIX)
 	s.logger.Info().Msg("Uploading local changes before integrity verification")
 	if err := s.UploadNewRecords(); err != nil {
