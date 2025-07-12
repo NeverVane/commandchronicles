@@ -92,6 +92,12 @@ func (rm *RulesManager) CreateRule(rule *SyncRule) error {
 	}
 
 	rm.logger.Info().Str("rule_id", rule.ID).Str("action", rule.Action).Str("target", rule.TargetDevice).Msg("Rule created")
+
+	// Trigger re-evaluation of existing commands
+	if err := rm.triggerReEvaluation(); err != nil {
+		rm.logger.Warn().Err(err).Msg("Failed to trigger re-evaluation after rule creation")
+	}
+
 	return nil
 }
 
@@ -134,20 +140,62 @@ func (rm *RulesManager) GetRule(ruleID string) (*SyncRule, error) {
 		return nil, fmt.Errorf("rule ID cannot be empty")
 	}
 
+	// First try exact match
 	query := `SELECT rule_data FROM sync_rules WHERE id = ?`
-
 	var ruleData string
 	err := rm.storage.GetDatabase().GetDB().QueryRow(query, ruleID).Scan(&ruleData)
-	if err != nil {
-		return nil, fmt.Errorf("rule not found: %w", err)
+	if err == nil {
+		var rule SyncRule
+		if err := json.Unmarshal([]byte(ruleData), &rule); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal rule: %w", err)
+		}
+		return &rule, nil
 	}
 
-	var rule SyncRule
-	if err := json.Unmarshal([]byte(ruleData), &rule); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal rule: %w", err)
+	// If no exact match and ID is at least 8 characters, try prefix match
+	if len(ruleID) >= 8 {
+		findQuery := `SELECT id, rule_data FROM sync_rules WHERE id LIKE ?`
+		rows, err := rm.storage.GetDatabase().GetDB().Query(findQuery, ruleID+"%")
+		if err != nil {
+			return nil, fmt.Errorf("failed to search for rules: %w", err)
+		}
+		defer rows.Close()
+
+		var matches []struct {
+			ID   string
+			Data string
+		}
+		for rows.Next() {
+			var match struct {
+				ID   string
+				Data string
+			}
+			if err := rows.Scan(&match.ID, &match.Data); err != nil {
+				continue
+			}
+			matches = append(matches, match)
+		}
+
+		if len(matches) == 0 {
+			return nil, fmt.Errorf("rule not found: %s", ruleID)
+		}
+
+		if len(matches) > 1 {
+			var matchingIDs []string
+			for _, match := range matches {
+				matchingIDs = append(matchingIDs, match.ID)
+			}
+			return nil, fmt.Errorf("ambiguous rule ID %s matches multiple rules: %v", ruleID, matchingIDs)
+		}
+
+		var rule SyncRule
+		if err := json.Unmarshal([]byte(matches[0].Data), &rule); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal rule: %w", err)
+		}
+		return &rule, nil
 	}
 
-	return &rule, nil
+	return nil, fmt.Errorf("rule not found: %s", ruleID)
 }
 
 // UpdateRule updates an existing rule
@@ -200,6 +248,7 @@ func (rm *RulesManager) DeleteRule(ruleID string) error {
 		return fmt.Errorf("rule ID cannot be empty")
 	}
 
+	// First try exact match
 	query := `DELETE FROM sync_rules WHERE id = ?`
 	result, err := rm.storage.GetDatabase().GetDB().Exec(query, ruleID)
 	if err != nil {
@@ -211,12 +260,64 @@ func (rm *RulesManager) DeleteRule(ruleID string) error {
 		return fmt.Errorf("failed to get rows affected: %w", err)
 	}
 
-	if rowsAffected == 0 {
-		return fmt.Errorf("rule not found: %s", ruleID)
+	// If exact match worked, we're done
+	if rowsAffected > 0 {
+		rm.logger.Info().Str("rule_id", ruleID).Msg("Rule deleted")
+
+		// Trigger re-evaluation of existing commands
+		if err := rm.triggerReEvaluation(); err != nil {
+			rm.logger.Warn().Err(err).Msg("Failed to trigger re-evaluation after rule deletion")
+		}
+
+		return nil
 	}
 
-	rm.logger.Info().Str("rule_id", ruleID).Msg("Rule deleted")
-	return nil
+	// If no exact match and ID is at least 8 characters, try prefix match
+	if len(ruleID) >= 8 {
+		// Find rules matching the prefix
+		findQuery := `SELECT id FROM sync_rules WHERE id LIKE ?`
+		rows, err := rm.storage.GetDatabase().GetDB().Query(findQuery, ruleID+"%")
+		if err != nil {
+			return fmt.Errorf("failed to search for rules: %w", err)
+		}
+		defer rows.Close()
+
+		var matchingIDs []string
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				continue
+			}
+			matchingIDs = append(matchingIDs, id)
+		}
+
+		if len(matchingIDs) == 0 {
+			return fmt.Errorf("rule not found: %s", ruleID)
+		}
+
+		if len(matchingIDs) > 1 {
+			return fmt.Errorf("ambiguous rule ID %s matches multiple rules: %v", ruleID, matchingIDs)
+		}
+
+		// Delete the matching rule
+		fullID := matchingIDs[0]
+		deleteQuery := `DELETE FROM sync_rules WHERE id = ?`
+		_, err = rm.storage.GetDatabase().GetDB().Exec(deleteQuery, fullID)
+		if err != nil {
+			return fmt.Errorf("failed to delete rule: %w", err)
+		}
+
+		rm.logger.Info().Str("rule_id", fullID).Str("partial_id", ruleID).Msg("Rule deleted")
+
+		// Trigger re-evaluation of existing commands
+		if err := rm.triggerReEvaluation(); err != nil {
+			rm.logger.Warn().Err(err).Msg("Failed to trigger re-evaluation after rule deletion")
+		}
+
+		return nil
+	}
+
+	return fmt.Errorf("rule not found: %s", ruleID)
 }
 
 // ToggleRule enables or disables a rule
@@ -247,11 +348,13 @@ func (rm *RulesManager) ToggleRule(ruleID string, active bool) error {
 		return fmt.Errorf("failed to toggle rule: %w", err)
 	}
 
-	action := "enabled"
-	if !active {
-		action = "disabled"
+	rm.logger.Info().Str("rule_id", ruleID).Bool("active", active).Msg("Rule toggled")
+
+	// Trigger re-evaluation of existing commands
+	if err := rm.triggerReEvaluation(); err != nil {
+		rm.logger.Warn().Err(err).Msg("Failed to trigger re-evaluation after rule toggle")
 	}
-	rm.logger.Info().Str("rule_id", ruleID).Str("action", action).Msg("Rule toggled")
+
 	return nil
 }
 
@@ -599,8 +702,7 @@ func (rm *RulesManager) GetRulesForDevice(deviceID string) ([]SyncRule, error) {
 
 // HasRules returns true if any rules exist in the system
 func (rm *RulesManager) HasRules() (bool, error) {
-	query := `SELECT COUNT(*) FROM sync_rules`
-
+	query := `SELECT COUNT(*) FROM sync_rules WHERE active = true`
 	var count int
 	err := rm.storage.GetDatabase().GetDB().QueryRow(query).Scan(&count)
 	if err != nil {
@@ -608,4 +710,49 @@ func (rm *RulesManager) HasRules() (bool, error) {
 	}
 
 	return count > 0, nil
+}
+
+// triggerReEvaluation marks all synced commands for re-sync so they get re-uploaded with new target_devices
+func (rm *RulesManager) triggerReEvaluation() error {
+	rm.logger.Debug().Msg("Triggering re-evaluation of existing commands due to rule change")
+
+	// Count all commands before marking them for re-evaluation
+	countQuery := `SELECT COUNT(*) FROM history`
+	var totalCount int64
+	if err := rm.storage.GetDatabase().GetDB().QueryRow(countQuery).Scan(&totalCount); err != nil {
+		rm.logger.Error().Err(err).Msg("Failed to count commands")
+		return err
+	}
+
+	if totalCount == 0 {
+		rm.logger.Debug().Msg("No commands found to re-evaluate")
+		return nil
+	}
+
+	// Mark all commands for re-sync so they get re-uploaded with new target_devices
+	// This includes both synced (sync_status = 1) and unsynced (sync_status = 0) commands
+	updateQuery := `UPDATE history SET sync_status = 0, last_synced = NULL WHERE sync_status = 1 OR sync_status = 0 OR sync_status IS NULL`
+	result, err := rm.storage.GetDatabase().GetDB().Exec(updateQuery)
+	if err != nil {
+		rm.logger.Error().Err(err).Msg("Failed to mark commands for re-sync")
+		return fmt.Errorf("failed to mark commands for re-sync: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		rm.logger.Error().Err(err).Msg("Failed to get rows affected")
+		rowsAffected = totalCount // Fallback to count
+	}
+
+	rm.logger.Info().
+		Int64("commands_marked", rowsAffected).
+		Msg("Marked all existing commands for rule re-evaluation - they will be re-uploaded with new target_devices on next sync")
+
+	return nil
+}
+
+// ForceReEvaluation forces re-evaluation of all commands for testing purposes
+func (rm *RulesManager) ForceReEvaluation() error {
+	rm.logger.Info().Msg("Forcing re-evaluation of all commands for testing")
+	return rm.triggerReEvaluation()
 }

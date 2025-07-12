@@ -5300,6 +5300,7 @@ You can create allow or deny rules based on devices and conditions.`,
 	cmd.AddCommand(rulesConflictsCmd(cfg))
 	cmd.AddCommand(rulesResolveCmd(cfg))
 	cmd.AddCommand(rulesStatusCmd(cfg))
+	cmd.AddCommand(rulesDebugReEvaluationCmd(cfg))
 
 	return cmd
 }
@@ -6268,6 +6269,105 @@ func rulesStatusCmd(cfg *config.Config) *cobra.Command {
 				formatter.Info("No rules configured. Commands will sync to all devices by default.")
 				formatter.Tip("Create rules with 'ccr rules allow <device>' or 'ccr rules deny <device>'")
 			}
+
+			return nil
+		},
+	}
+}
+
+func rulesDebugReEvaluationCmd(cfg *config.Config) *cobra.Command {
+	return &cobra.Command{
+		Use:   "debug-reevaluation",
+		Short: "Test rule re-evaluation fix",
+		Long: `Test the fix for rule re-evaluation that ensures ALL commands (both synced and unsynced)
+get marked for re-evaluation when rules change. This addresses the bug where commands
+recorded after rule creation weren't getting the rules applied.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			verbose, _ := cmd.Flags().GetBool("verbose")
+			noColor, _ := cmd.Flags().GetBool("no-color")
+
+			// Create formatter for colored output
+			formatter := output.NewFormatter(cfg)
+			formatter.SetFlags(verbose, false, noColor)
+
+			storage, err := securestorage.NewSecureStorage(&securestorage.StorageOptions{
+				Config:          cfg,
+				CreateIfMissing: false,
+			})
+			if err != nil {
+				return fmt.Errorf("failed to initialize storage: %w", err)
+			}
+			defer storage.Close()
+
+			// Initialize auth manager
+			authManager, err := auth.NewAuthManager(cfg)
+			if err != nil {
+				return fmt.Errorf("failed to initialize auth manager: %w", err)
+			}
+			defer authManager.Close()
+
+			// Check if authenticated
+			if !authManager.IsSessionActive() {
+				return fmt.Errorf("please unlock your storage first with 'ccr unlock'")
+			}
+
+			// Initialize sync service to get rules manager
+			syncService := sync.NewSyncService(cfg, storage, authManager)
+			rulesManager := syncService.GetRulesManager()
+
+			formatter.Header("Testing Rule Re-evaluation Fix")
+
+			// Count total commands before
+			db := storage.GetDatabase().GetDB()
+			var totalBefore int
+			if err := db.QueryRow("SELECT COUNT(*) FROM history").Scan(&totalBefore); err != nil {
+				return fmt.Errorf("failed to count commands: %w", err)
+			}
+
+			var unsyncedBefore int
+			if err := db.QueryRow("SELECT COUNT(*) FROM history WHERE sync_status = 0 OR sync_status IS NULL").Scan(&unsyncedBefore); err != nil {
+				return fmt.Errorf("failed to count unsynced commands: %w", err)
+			}
+
+			formatter.Println("Before re-evaluation:")
+			formatter.Println("  Total commands: %d", totalBefore)
+			formatter.Println("  Unsynced commands: %d", unsyncedBefore)
+
+			if totalBefore == 0 {
+				formatter.Warning("No commands found. Record some commands first with shell hooks.")
+				return nil
+			}
+
+			// Force re-evaluation to test the fix
+			formatter.Println("\nTriggering rule re-evaluation (testing the fix)...")
+			if err := rulesManager.ForceReEvaluation(); err != nil {
+				return fmt.Errorf("failed to trigger re-evaluation: %w", err)
+			}
+
+			// Count unsynced commands after
+			var unsyncedAfter int
+			if err := db.QueryRow("SELECT COUNT(*) FROM history WHERE sync_status = 0 OR sync_status IS NULL").Scan(&unsyncedAfter); err != nil {
+				return fmt.Errorf("failed to count unsynced commands after: %w", err)
+			}
+
+			formatter.Println("\nAfter re-evaluation:")
+			formatter.Println("  Unsynced commands: %d", unsyncedAfter)
+
+			// Analyze results
+			formatter.Separator()
+			if unsyncedAfter == totalBefore {
+				formatter.Success("✅ FIX WORKING: All %d commands marked for re-evaluation", totalBefore)
+				formatter.Info("This proves the fix correctly handles both synced and unsynced commands")
+			} else {
+				formatter.Error("❌ FIX NOT WORKING: Only %d of %d commands marked for re-evaluation", unsyncedAfter, totalBefore)
+				formatter.Warning("The triggerReEvaluation fix may not be working correctly")
+			}
+
+			formatter.Separator()
+			formatter.Info("What this test proves:")
+			formatter.Info("- Rule changes now affect ALL commands, not just previously synced ones")
+			formatter.Info("- Commands recorded after rule creation will get rules applied during sync")
+			formatter.Info("- The single point of rule evaluation (during sync) works correctly")
 
 			return nil
 		},

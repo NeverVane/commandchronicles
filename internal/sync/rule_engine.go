@@ -156,21 +156,16 @@ func (re *RuleEngine) GetDefaultTargets() (*RuleEvaluationResult, error) {
 
 // getDefaultTargets implements the default sync behavior
 func (re *RuleEngine) getDefaultTargets() (*RuleEvaluationResult, error) {
-	allDevices, err := re.getAllActiveDevices()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get all devices for default targets: %w", err)
-	}
-
 	result := &RuleEvaluationResult{
-		TargetDevices: allDevices,
+		TargetDevices: []string{},
 		RulesApplied:  []string{},
 		DefaultUsed:   true,
-		Explanation:   "No rules configured, syncing to all devices",
+		Explanation:   "No rules configured, using default behavior (empty target_devices)",
 	}
 
 	re.logger.Debug().
 		Int("target_devices", len(result.TargetDevices)).
-		Msg("Using default sync targets (all devices)")
+		Msg("Using default sync targets (empty - sync to all devices)")
 
 	return result, nil
 }

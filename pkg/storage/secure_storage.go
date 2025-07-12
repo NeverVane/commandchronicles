@@ -919,8 +919,8 @@ func (ss *SecureStorage) UpdateRecordSyncMetadata(recordID int64, hash, deviceID
 		"device_id": deviceID,
 	}).Debug().Msg("Updating record sync metadata")
 
-	query := `UPDATE history SET record_hash = ?, device_id = ? WHERE id = ?`
-	result, err := ss.db.GetDB().Exec(query, hash, deviceID, recordID)
+	query := `UPDATE history SET record_hash = ?, device_id = ?, sync_status = 1, last_synced = ? WHERE id = ?`
+	result, err := ss.db.GetDB().Exec(query, hash, deviceID, time.Now().UnixMilli(), recordID)
 	if err != nil {
 		return fmt.Errorf("failed to update sync metadata: %w", err)
 	}
