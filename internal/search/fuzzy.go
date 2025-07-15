@@ -1,10 +1,13 @@
 package search
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/blevesearch/bleve/v2"
@@ -22,7 +25,11 @@ type FuzzySearchEngine struct {
 	index       bleve.Index
 	indexPath   string
 	logger      *logger.Logger
-	initialized bool
+	initialized int32 // Use atomic for thread-safe access
+
+	// Synchronization
+	mu        sync.RWMutex
+	indexLock *SearchIndexLock
 }
 
 // SearchableCommandRecord represents a command record optimized for search indexing
@@ -78,19 +85,51 @@ type FuzzySearchResult struct {
 
 // NewFuzzySearchEngine creates a new fuzzy search engine
 func NewFuzzySearchEngine(indexPath string) *FuzzySearchEngine {
+	indexLock, err := NewSearchIndexLock(indexPath)
+	if err != nil {
+		// Log error but don't fail initialization
+		log := logger.GetLogger().WithComponent("fuzzy-search")
+		log.Warn().Err(err).Msg("Failed to create index lock, proceeding without file locking")
+	}
+
 	return &FuzzySearchEngine{
 		indexPath: indexPath,
 		logger:    logger.GetLogger().WithComponent("fuzzy-search"),
+		indexLock: indexLock,
 	}
 }
 
 // Initialize sets up the Bleve index with optimized mapping for command search
 func (f *FuzzySearchEngine) Initialize() error {
-	if f.initialized {
+	if atomic.LoadInt32(&f.initialized) != 0 {
+		return nil
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	// Double-check after acquiring lock
+	if atomic.LoadInt32(&f.initialized) != 0 {
 		return nil
 	}
 
 	f.logger.Info().Str("index_path", f.indexPath).Msg("Initializing fuzzy search engine")
+
+	// Acquire write lock for initialization
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if f.indexLock != nil {
+		if err := f.indexLock.Lock(ctx); err != nil {
+			f.logger.Warn().Err(err).Msg("Failed to acquire index lock, proceeding without file locking")
+		} else {
+			defer func() {
+				if err := f.indexLock.Unlock(); err != nil {
+					f.logger.Warn().Err(err).Msg("Failed to release index lock")
+				}
+			}()
+		}
+	}
 
 	// Create index directory if it doesn't exist
 	if err := os.MkdirAll(filepath.Dir(f.indexPath), 0755); err != nil {
@@ -117,7 +156,7 @@ func (f *FuzzySearchEngine) Initialize() error {
 	}
 
 	f.index = index
-	f.initialized = true
+	atomic.StoreInt32(&f.initialized, 1)
 
 	f.logger.Info().Msg("Fuzzy search engine initialized successfully")
 	return nil
@@ -247,8 +286,27 @@ func (f *FuzzySearchEngine) createIndexMapping() mapping.IndexMapping {
 
 // IndexCommand adds or updates a command record in the search index
 func (f *FuzzySearchEngine) IndexCommand(record *storage.CommandRecord) error {
-	if !f.initialized {
+	if atomic.LoadInt32(&f.initialized) == 0 {
 		return fmt.Errorf("fuzzy search engine not initialized")
+	}
+
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+
+	// Acquire read lock for indexing
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if f.indexLock != nil {
+		if err := f.indexLock.RLock(ctx); err != nil {
+			f.logger.Warn().Err(err).Msg("Failed to acquire read lock for indexing")
+		} else {
+			defer func() {
+				if err := f.indexLock.RUnlock(); err != nil {
+					f.logger.Warn().Err(err).Msg("Failed to release read lock")
+				}
+			}()
+		}
 	}
 
 	searchableRecord := f.convertToSearchableRecord(record)
@@ -263,12 +321,31 @@ func (f *FuzzySearchEngine) IndexCommand(record *storage.CommandRecord) error {
 
 // IndexCommands adds multiple command records to the search index in batch
 func (f *FuzzySearchEngine) IndexCommands(records []*storage.CommandRecord) error {
-	if !f.initialized {
+	if atomic.LoadInt32(&f.initialized) == 0 {
 		return fmt.Errorf("fuzzy search engine not initialized")
 	}
 
 	if len(records) == 0 {
 		return nil
+	}
+
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+
+	// Acquire read lock for batch indexing
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if f.indexLock != nil {
+		if err := f.indexLock.RLock(ctx); err != nil {
+			f.logger.Warn().Err(err).Msg("Failed to acquire read lock for batch indexing")
+		} else {
+			defer func() {
+				if err := f.indexLock.RUnlock(); err != nil {
+					f.logger.Warn().Err(err).Msg("Failed to release read lock")
+				}
+			}()
+		}
 	}
 
 	f.logger.Debug().Int("count", len(records)).Msg("Batch indexing commands")
@@ -291,8 +368,27 @@ func (f *FuzzySearchEngine) IndexCommands(records []*storage.CommandRecord) erro
 
 // Search performs a fuzzy search with the given query and options
 func (f *FuzzySearchEngine) Search(searchQuery string, opts *FuzzySearchOptions) ([]*FuzzySearchResult, error) {
-	if !f.initialized {
+	if atomic.LoadInt32(&f.initialized) == 0 {
 		return nil, fmt.Errorf("fuzzy search engine not initialized")
+	}
+
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+
+	// Acquire read lock for searching
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if f.indexLock != nil {
+		if err := f.indexLock.RLock(ctx); err != nil {
+			f.logger.Warn().Err(err).Msg("Failed to acquire read lock for searching")
+		} else {
+			defer func() {
+				if err := f.indexLock.RUnlock(); err != nil {
+					f.logger.Warn().Err(err).Msg("Failed to release read lock")
+				}
+			}()
+		}
 	}
 
 	if opts == nil {
@@ -570,6 +666,13 @@ func (f *FuzzySearchEngine) convertToSearchableRecord(record *storage.CommandRec
 	// For now, mark commonly used commands as frequent
 	isFrequent := f.isFrequentCommand(record.Command)
 
+	// Deep copy tags to prevent shared reference issues
+	var tags []string
+	if record.Tags != nil {
+		tags = make([]string, len(record.Tags))
+		copy(tags, record.Tags)
+	}
+
 	return &SearchableCommandRecord{
 		ID:         id,
 		DatabaseID: record.ID,
@@ -582,7 +685,7 @@ func (f *FuzzySearchEngine) convertToSearchableRecord(record *storage.CommandRec
 		User:       record.User,
 		Shell:      record.Shell,
 		Note:       record.Note,
-		Tags:       record.Tags,
+		Tags:       tags, // Use deep copied tags
 		ExitCode:   record.ExitCode,
 		Duration:   record.Duration,
 		Timestamp:  time.UnixMilli(record.Timestamp),
@@ -637,9 +740,12 @@ func (f *FuzzySearchEngine) getDefaultSearchOptions() *FuzzySearchOptions {
 
 // GetIndexStats returns statistics about the search index
 func (f *FuzzySearchEngine) GetIndexStats() (map[string]interface{}, error) {
-	if !f.initialized {
+	if atomic.LoadInt32(&f.initialized) == 0 {
 		return nil, fmt.Errorf("fuzzy search engine not initialized")
 	}
+
+	f.mu.RLock()
+	defer f.mu.RUnlock()
 
 	docCount, err := f.index.DocCount()
 	if err != nil {
@@ -649,7 +755,7 @@ func (f *FuzzySearchEngine) GetIndexStats() (map[string]interface{}, error) {
 	stats := map[string]interface{}{
 		"document_count": docCount,
 		"index_path":     f.indexPath,
-		"initialized":    f.initialized,
+		"initialized":    atomic.LoadInt32(&f.initialized) != 0,
 	}
 
 	return stats, nil
@@ -657,8 +763,27 @@ func (f *FuzzySearchEngine) GetIndexStats() (map[string]interface{}, error) {
 
 // DeleteCommand removes a command from the search index
 func (f *FuzzySearchEngine) DeleteCommand(sessionID string, timestamp int64) error {
-	if !f.initialized {
+	if atomic.LoadInt32(&f.initialized) == 0 {
 		return fmt.Errorf("fuzzy search engine not initialized")
+	}
+
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+
+	// Acquire read lock for deletion
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if f.indexLock != nil {
+		if err := f.indexLock.RLock(ctx); err != nil {
+			f.logger.Warn().Err(err).Msg("Failed to acquire read lock for deletion")
+		} else {
+			defer func() {
+				if err := f.indexLock.RUnlock(); err != nil {
+					f.logger.Warn().Err(err).Msg("Failed to release read lock")
+				}
+			}()
+		}
 	}
 
 	id := fmt.Sprintf("%s_%d", sessionID, timestamp)
@@ -667,9 +792,18 @@ func (f *FuzzySearchEngine) DeleteCommand(sessionID string, timestamp int64) err
 
 // Close closes the search index and releases resources
 func (f *FuzzySearchEngine) Close() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if f.indexLock != nil {
+		if err := f.indexLock.Cleanup(); err != nil {
+			f.logger.Warn().Err(err).Msg("Failed to cleanup index locks")
+		}
+	}
+
 	if f.index != nil {
 		err := f.index.Close()
-		f.initialized = false
+		atomic.StoreInt32(&f.initialized, 0)
 		return err
 	}
 	return nil
@@ -679,27 +813,110 @@ func (f *FuzzySearchEngine) Close() error {
 func (f *FuzzySearchEngine) RebuildIndex(records []*storage.CommandRecord) error {
 	f.logger.Info().Int("record_count", len(records)).Msg("Rebuilding search index")
 
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	// Acquire write lock for rebuild
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	if f.indexLock != nil {
+		if err := f.indexLock.Lock(ctx); err != nil {
+			f.logger.Warn().Err(err).Msg("Failed to acquire write lock for rebuild")
+		} else {
+			defer func() {
+				if err := f.indexLock.Unlock(); err != nil {
+					f.logger.Warn().Err(err).Msg("Failed to release write lock")
+				}
+			}()
+		}
+	}
+
+	// Create temporary index path for atomic rebuild
+	tempIndexPath := f.indexPath + ".tmp"
+
+	// Clean up any existing temp directory
+	if err := os.RemoveAll(tempIndexPath); err != nil {
+		f.logger.Warn().Err(err).Msg("Failed to remove existing temp index")
+	}
+
 	// Close existing index
 	if f.index != nil {
 		f.index.Close()
+		f.index = nil
 	}
 
-	// Remove existing index
+	// Create new index in temporary location
+	mapping := f.createIndexMapping()
+	tempIndex, err := bleve.New(tempIndexPath, mapping)
+	if err != nil {
+		return fmt.Errorf("failed to create temporary index: %w", err)
+	}
+
+	// Index all records in temporary index
+	if len(records) > 0 {
+		batch := tempIndex.NewBatch()
+		for _, record := range records {
+			searchableRecord := f.convertToSearchableRecord(record)
+			if err := batch.Index(searchableRecord.ID, searchableRecord); err != nil {
+				tempIndex.Close()
+				os.RemoveAll(tempIndexPath)
+				return fmt.Errorf("failed to add record to batch: %w", err)
+			}
+		}
+
+		if err := tempIndex.Batch(batch); err != nil {
+			tempIndex.Close()
+			os.RemoveAll(tempIndexPath)
+			return fmt.Errorf("failed to execute batch index: %w", err)
+		}
+	}
+
+	// Close temporary index
+	if err := tempIndex.Close(); err != nil {
+		os.RemoveAll(tempIndexPath)
+		return fmt.Errorf("failed to close temporary index: %w", err)
+	}
+
+	// Remove old index
 	if err := os.RemoveAll(f.indexPath); err != nil {
-		f.logger.Warn().Err(err).Msg("Failed to remove existing index")
+		f.logger.Warn().Err(err).Msg("Failed to remove old index")
 	}
 
-	// Reinitialize
-	f.initialized = false
-	if err := f.Initialize(); err != nil {
+	// Atomically move temporary index to final location
+	if err := os.Rename(tempIndexPath, f.indexPath); err != nil {
+		return fmt.Errorf("failed to move temporary index to final location: %w", err)
+	}
+
+	// Reopen the index
+	atomic.StoreInt32(&f.initialized, 0)
+	if err := f.initializeWithoutLock(); err != nil {
 		return fmt.Errorf("failed to reinitialize index: %w", err)
 	}
 
-	// Index all records
-	if err := f.IndexCommands(records); err != nil {
-		return fmt.Errorf("failed to index records: %w", err)
+	f.logger.Info().Int("indexed_records", len(records)).Msg("Index rebuild completed atomically")
+	return nil
+}
+
+// initializeWithoutLock initializes the index without acquiring locks (used internally)
+func (f *FuzzySearchEngine) initializeWithoutLock() error {
+	if atomic.LoadInt32(&f.initialized) != 0 {
+		return nil
 	}
 
-	f.logger.Info().Int("indexed_records", len(records)).Msg("Index rebuild completed")
+	// Create index directory if it doesn't exist
+	if err := os.MkdirAll(filepath.Dir(f.indexPath), 0755); err != nil {
+		return fmt.Errorf("failed to create index directory: %w", err)
+	}
+
+	// Open existing index
+	index, err := bleve.Open(f.indexPath)
+	if err != nil {
+		return fmt.Errorf("failed to open search index: %w", err)
+	}
+
+	f.index = index
+	atomic.StoreInt32(&f.initialized, 1)
+
 	return nil
 }

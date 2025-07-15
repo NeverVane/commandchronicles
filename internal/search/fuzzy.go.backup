@@ -1,0 +1,841 @@
+package search
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/blevesearch/bleve/v2"
+	"github.com/blevesearch/bleve/v2/analysis/lang/en"
+	"github.com/blevesearch/bleve/v2/mapping"
+
+	"github.com/NeverVane/commandchronicles/internal/logger"
+	"github.com/NeverVane/commandchronicles/internal/storage"
+)
+
+// FuzzySearchEngine provides fuzzy search capabilities using Bleve
+type FuzzySearchEngine struct {
+	index       bleve.Index
+	indexPath   string
+	logger      *logger.Logger
+	initialized int32 // Use atomic for thread-safe access
+
+	// Synchronization
+	mu        sync.RWMutex
+	indexLock *SearchIndexLock
+}
+
+// SearchableCommandRecord represents a command record optimized for search indexing
+type SearchableCommandRecord struct {
+	ID         string    `json:"id"`
+	DatabaseID int64     `json:"database_id"`
+	Command    string    `json:"command"`
+	WorkingDir string    `json:"working_dir"`
+	Hostname   string    `json:"hostname"`
+	SessionID  string    `json:"session_id"`
+	GitBranch  string    `json:"git_branch"`
+	GitRoot    string    `json:"git_root"`
+	User       string    `json:"user"`
+	Shell      string    `json:"shell"`
+	Note       string    `json:"note"`
+	Tags       []string  `json:"tags"`
+	ExitCode   int       `json:"exit_code"`
+	Duration   int64     `json:"duration_ms"`
+	Timestamp  time.Time `json:"timestamp"`
+	Success    bool      `json:"success"`
+	Recent     bool      `json:"recent"`
+	Frequent   bool      `json:"frequent"`
+}
+
+// FuzzySearchOptions configures fuzzy search behavior
+type FuzzySearchOptions struct {
+	// Fuzziness level (0-2, where 0 is exact match)
+	Fuzziness int
+
+	// Prefix length for fuzzy matching (characters that must match exactly)
+	PrefixLength int
+
+	// Boost factors for different match types
+	BoostRecent     float64
+	BoostFrequent   float64
+	BoostExactMatch float64
+	BoostPrefix     float64
+
+	// Minimum score threshold for results
+	MinScore float64
+
+	// Include additional fields in search
+	IncludeWorkDir bool
+	IncludeGitInfo bool
+	AnalyzeCommand bool
+
+	// Search constraints
+	MaxCandidates int
+	SearchTimeout time.Duration
+}
+
+// FuzzySearchResult represents a search result with score and context
+type FuzzySearchResult struct {
+	Record      *storage.CommandRecord
+	Score       float64
+	Explanation string
+	Fragments   map[string][]string
+}
+
+// NewFuzzySearchEngine creates a new fuzzy search engine
+func NewFuzzySearchEngine(indexPath string) *FuzzySearchEngine {
+	indexLock, err := NewSearchIndexLock(indexPath)
+	if err != nil {
+		// Log error but don't fail initialization
+		log := logger.GetLogger().WithComponent("fuzzy-search")
+		log.Warn().Err(err).Msg("Failed to create index lock, proceeding without file locking")
+	}
+
+	return &FuzzySearchEngine{
+		indexPath: indexPath,
+		logger:    logger.GetLogger().WithComponent("fuzzy-search"),
+		indexLock: indexLock,
+	}
+}
+
+// Initialize sets up the Bleve index with optimized mapping for command search
+func (f *FuzzySearchEngine) Initialize() error {
+	if atomic.LoadInt32(&f.initialized) != 0 {
+		return nil
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	// Double-check after acquiring lock
+	if atomic.LoadInt32(&f.initialized) != 0 {
+		return nil
+	}
+
+	f.logger.Info().Str("index_path", f.indexPath).Msg("Initializing fuzzy search engine")
+
+	// Acquire write lock for initialization
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if f.indexLock != nil {
+		if err := f.indexLock.Lock(ctx); err != nil {
+			f.logger.Warn().Err(err).Msg("Failed to acquire index lock, proceeding without file locking")
+		} else {
+			defer func() {
+				if err := f.indexLock.Unlock(); err != nil {
+					f.logger.Warn().Err(err).Msg("Failed to release index lock")
+				}
+			}()
+		}
+	}
+
+	// Create index directory if it doesn't exist
+	if err := os.MkdirAll(filepath.Dir(f.indexPath), 0755); err != nil {
+		return fmt.Errorf("failed to create index directory: %w", err)
+	}
+
+	// Create custom mapping for command records
+	mapping := f.createIndexMapping()
+
+	var index bleve.Index
+	var err error
+
+	// Try to open existing index, create if it doesn't exist
+	if _, err := os.Stat(f.indexPath); os.IsNotExist(err) {
+		f.logger.Info().Msg("Creating new search index")
+		index, err = bleve.New(f.indexPath, mapping)
+	} else {
+		f.logger.Info().Msg("Opening existing search index")
+		index, err = bleve.Open(f.indexPath)
+	}
+
+	if err != nil {
+		return fmt.Errorf("failed to initialize search index: %w", err)
+	}
+
+	f.index = index
+	atomic.StoreInt32(&f.initialized, 1)
+
+	f.logger.Info().Msg("Fuzzy search engine initialized successfully")
+	return nil
+}
+
+// createIndexMapping creates a custom Bleve mapping optimized for command search
+func (f *FuzzySearchEngine) createIndexMapping() mapping.IndexMapping {
+	// Create custom mapping
+	commandMapping := bleve.NewDocumentMapping()
+
+	// Command field - main search target with analysis
+	commandFieldMapping := bleve.NewTextFieldMapping()
+	commandFieldMapping.Analyzer = en.AnalyzerName
+	commandFieldMapping.Store = true
+	commandFieldMapping.Index = true
+	commandFieldMapping.IncludeTermVectors = true
+	commandMapping.AddFieldMappingsAt("command", commandFieldMapping)
+
+	// Working directory - keyword search
+	workDirMapping := bleve.NewTextFieldMapping()
+	workDirMapping.Analyzer = "keyword"
+	workDirMapping.Store = true
+	workDirMapping.Index = true
+	commandMapping.AddFieldMappingsAt("working_dir", workDirMapping)
+
+	// Hostname - keyword search
+	hostnameMapping := bleve.NewTextFieldMapping()
+	hostnameMapping.Analyzer = "keyword"
+	hostnameMapping.Store = true
+	hostnameMapping.Index = true
+	commandMapping.AddFieldMappingsAt("hostname", hostnameMapping)
+
+	// Session ID - keyword search
+	sessionMapping := bleve.NewTextFieldMapping()
+	sessionMapping.Analyzer = "keyword"
+	sessionMapping.Store = true
+	sessionMapping.Index = true
+	commandMapping.AddFieldMappingsAt("session_id", sessionMapping)
+
+	// Git branch - text search
+	gitBranchMapping := bleve.NewTextFieldMapping()
+	gitBranchMapping.Analyzer = "keyword"
+	gitBranchMapping.Store = true
+	gitBranchMapping.Index = true
+	commandMapping.AddFieldMappingsAt("git_branch", gitBranchMapping)
+
+	// Git root - keyword search
+	gitRootMapping := bleve.NewTextFieldMapping()
+	gitRootMapping.Analyzer = "keyword"
+	gitRootMapping.Store = true
+	gitRootMapping.Index = true
+	commandMapping.AddFieldMappingsAt("git_root", gitRootMapping)
+
+	// User - keyword search
+	userMapping := bleve.NewTextFieldMapping()
+	userMapping.Analyzer = "keyword"
+	userMapping.Store = true
+	userMapping.Index = true
+	commandMapping.AddFieldMappingsAt("user", userMapping)
+
+	// Shell - keyword search
+	shellMapping := bleve.NewTextFieldMapping()
+	shellMapping.Analyzer = "keyword"
+	shellMapping.Store = true
+	shellMapping.Index = true
+	commandMapping.AddFieldMappingsAt("shell", shellMapping)
+
+	// Note - full text search
+	noteMapping := bleve.NewTextFieldMapping()
+	noteMapping.Analyzer = en.AnalyzerName
+	noteMapping.Store = true
+	noteMapping.Index = true
+	commandMapping.AddFieldMappingsAt("note", noteMapping)
+
+	// Tags - keyword search for exact tag matching
+	tagsMapping := bleve.NewTextFieldMapping()
+	tagsMapping.Analyzer = "keyword"
+	tagsMapping.Store = true
+	tagsMapping.Index = true
+	commandMapping.AddFieldMappingsAt("tags", tagsMapping)
+
+	// Numeric fields
+	exitCodeMapping := bleve.NewNumericFieldMapping()
+	exitCodeMapping.Store = true
+	exitCodeMapping.Index = true
+	commandMapping.AddFieldMappingsAt("exit_code", exitCodeMapping)
+
+	durationMapping := bleve.NewNumericFieldMapping()
+	durationMapping.Store = true
+	durationMapping.Index = true
+	commandMapping.AddFieldMappingsAt("duration_ms", durationMapping)
+
+	timestampMapping := bleve.NewDateTimeFieldMapping()
+	timestampMapping.Store = true
+	timestampMapping.Index = true
+	commandMapping.AddFieldMappingsAt("timestamp", timestampMapping)
+
+	databaseIdMapping := bleve.NewNumericFieldMapping()
+	databaseIdMapping.Store = true
+	databaseIdMapping.Index = true
+	commandMapping.AddFieldMappingsAt("database_id", databaseIdMapping)
+
+	// Boolean fields
+	successMapping := bleve.NewBooleanFieldMapping()
+	successMapping.Store = true
+	successMapping.Index = true
+	commandMapping.AddFieldMappingsAt("success", successMapping)
+
+	recentMapping := bleve.NewBooleanFieldMapping()
+	recentMapping.Store = true
+	recentMapping.Index = true
+	commandMapping.AddFieldMappingsAt("recent", recentMapping)
+
+	frequentMapping := bleve.NewBooleanFieldMapping()
+	frequentMapping.Store = true
+	frequentMapping.Index = true
+	commandMapping.AddFieldMappingsAt("frequent", frequentMapping)
+
+	// Create index mapping
+	indexMapping := bleve.NewIndexMapping()
+	indexMapping.AddDocumentMapping("command", commandMapping)
+	indexMapping.DefaultMapping = commandMapping
+
+	return indexMapping
+}
+
+// IndexCommand adds or updates a command record in the search index
+func (f *FuzzySearchEngine) IndexCommand(record *storage.CommandRecord) error {
+	if atomic.LoadInt32(&f.initialized) == 0 {
+		return fmt.Errorf("fuzzy search engine not initialized")
+	}
+
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+
+	// Acquire read lock for indexing
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if f.indexLock != nil {
+		if err := f.indexLock.RLock(ctx); err != nil {
+			f.logger.Warn().Err(err).Msg("Failed to acquire read lock for indexing")
+		} else {
+			defer func() {
+				if err := f.indexLock.RUnlock(); err != nil {
+					f.logger.Warn().Err(err).Msg("Failed to release read lock")
+				}
+			}()
+		}
+	}
+
+	searchableRecord := f.convertToSearchableRecord(record)
+
+	err := f.index.Index(searchableRecord.ID, searchableRecord)
+	if err != nil {
+		return fmt.Errorf("failed to index command: %w", err)
+	}
+
+	return nil
+}
+
+// IndexCommands adds multiple command records to the search index in batch
+func (f *FuzzySearchEngine) IndexCommands(records []*storage.CommandRecord) error {
+	if atomic.LoadInt32(&f.initialized) == 0 {
+		return fmt.Errorf("fuzzy search engine not initialized")
+	}
+
+	if len(records) == 0 {
+		return nil
+	}
+
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+
+	// Acquire read lock for batch indexing
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if f.indexLock != nil {
+		if err := f.indexLock.RLock(ctx); err != nil {
+			f.logger.Warn().Err(err).Msg("Failed to acquire read lock for batch indexing")
+		} else {
+			defer func() {
+				if err := f.indexLock.RUnlock(); err != nil {
+					f.logger.Warn().Err(err).Msg("Failed to release read lock")
+				}
+			}()
+		}
+	}
+
+	f.logger.Debug().Int("count", len(records)).Msg("Batch indexing commands")
+
+	batch := f.index.NewBatch()
+	for _, record := range records {
+		searchableRecord := f.convertToSearchableRecord(record)
+		if err := batch.Index(searchableRecord.ID, searchableRecord); err != nil {
+			return fmt.Errorf("failed to add record to batch: %w", err)
+		}
+	}
+
+	if err := f.index.Batch(batch); err != nil {
+		return fmt.Errorf("failed to execute batch index: %w", err)
+	}
+
+	f.logger.Debug().Int("indexed", len(records)).Msg("Batch indexing completed")
+	return nil
+}
+
+// Search performs a fuzzy search with the given query and options
+func (f *FuzzySearchEngine) Search(searchQuery string, opts *FuzzySearchOptions) ([]*FuzzySearchResult, error) {
+	if atomic.LoadInt32(&f.initialized) == 0 {
+		return nil, fmt.Errorf("fuzzy search engine not initialized")
+	}
+
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+
+	// Acquire read lock for searching
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if f.indexLock != nil {
+		if err := f.indexLock.RLock(ctx); err != nil {
+			f.logger.Warn().Err(err).Msg("Failed to acquire read lock for searching")
+		} else {
+			defer func() {
+				if err := f.indexLock.RUnlock(); err != nil {
+					f.logger.Warn().Err(err).Msg("Failed to release read lock")
+				}
+			}()
+		}
+	}
+
+	if opts == nil {
+		opts = f.getDefaultSearchOptions()
+	}
+
+	f.logger.Debug().
+		Str("query", searchQuery).
+		Int("fuzziness", opts.Fuzziness).
+		Float64("min_score", opts.MinScore).
+		Msg("Performing fuzzy search")
+
+	// Build the search query
+	bleveQuery := f.buildSearchQuery(searchQuery, opts)
+
+	// Create search request
+	searchRequest := bleve.NewSearchRequest(bleveQuery)
+	searchRequest.Size = opts.MaxCandidates
+	searchRequest.Fields = []string{"*"}
+	searchRequest.IncludeLocations = true
+
+	// Add highlighting
+	searchRequest.Highlight = bleve.NewHighlight()
+	searchRequest.Highlight.AddField("command")
+	if opts.IncludeWorkDir {
+		searchRequest.Highlight.AddField("working_dir")
+	}
+	if opts.IncludeGitInfo {
+		searchRequest.Highlight.AddField("git_branch")
+	}
+
+	// Set timeout
+	if opts.SearchTimeout > 0 {
+		// Bleve doesn't have built-in timeout, but we can implement it at a higher level
+	}
+
+	// Execute search
+	searchResults, err := f.index.Search(searchRequest)
+	if err != nil {
+		return nil, fmt.Errorf("search execution failed: %w", err)
+	}
+
+	// Convert results
+	results := make([]*FuzzySearchResult, 0, len(searchResults.Hits))
+	for _, hit := range searchResults.Hits {
+		if hit.Score < opts.MinScore {
+			continue
+		}
+
+		result := &FuzzySearchResult{
+			Score:     hit.Score,
+			Fragments: make(map[string][]string),
+		}
+
+		// Extract record data from stored fields
+		if record, err := f.extractRecordFromHit(hit); err == nil {
+			result.Record = record
+		} else {
+			f.logger.Warn().Err(err).Str("doc_id", hit.ID).Msg("Failed to extract record from search hit")
+			continue
+		}
+
+		// Extract highlighted fragments
+		if hit.Fragments != nil {
+			for field, fragments := range hit.Fragments {
+				result.Fragments[field] = fragments
+			}
+		}
+
+		results = append(results, result)
+	}
+
+	f.logger.Debug().
+		Int("total_hits", len(searchResults.Hits)).
+		Int("filtered_results", len(results)).
+		Dur("search_time", searchResults.Took).
+		Msg("Fuzzy search completed")
+
+	return results, nil
+}
+
+// buildSearchQuery constructs a Bleve query for fuzzy search
+func (f *FuzzySearchEngine) buildSearchQuery(searchQuery string, opts *FuzzySearchOptions) bleve.Query {
+	if searchQuery == "" {
+		return bleve.NewMatchAllQuery()
+	}
+
+	// Create a boolean query to combine multiple search strategies
+	boolQuery := bleve.NewBooleanQuery()
+
+	// 1. Exact match (highest boost)
+	if opts.BoostExactMatch > 0 {
+		exactQuery := bleve.NewMatchQuery(searchQuery)
+		exactQuery.SetField("command")
+		exactQuery.SetBoost(opts.BoostExactMatch)
+		boolQuery.AddShould(exactQuery)
+	}
+
+	// 2. Prefix match (high boost)
+	if opts.BoostPrefix > 0 {
+		prefixQuery := bleve.NewPrefixQuery(searchQuery)
+		prefixQuery.SetField("command")
+		prefixQuery.SetBoost(opts.BoostPrefix)
+		boolQuery.AddShould(prefixQuery)
+	}
+
+	// 3. Fuzzy match on command (medium boost)
+	fuzzyQuery := bleve.NewFuzzyQuery(searchQuery)
+	fuzzyQuery.SetField("command")
+	fuzzyQuery.SetFuzziness(opts.Fuzziness)
+	// Note: PrefixLength is not directly supported in bleve fuzzy queries
+	// The prefix matching is handled by separate prefix queries
+	fuzzyQuery.SetBoost(1.0)
+	boolQuery.AddShould(fuzzyQuery)
+
+	// 4. Term match with analysis (for partial word matches)
+	if opts.AnalyzeCommand {
+		termQuery := bleve.NewMatchQuery(searchQuery)
+		termQuery.SetField("command")
+		termQuery.SetBoost(0.8)
+		boolQuery.AddShould(termQuery)
+	}
+
+	// 5. Include working directory search if enabled
+	if opts.IncludeWorkDir {
+		workDirQuery := bleve.NewWildcardQuery("*" + searchQuery + "*")
+		workDirQuery.SetField("working_dir")
+		workDirQuery.SetBoost(0.5)
+		boolQuery.AddShould(workDirQuery)
+	}
+
+	// 6. Include git info search if enabled
+	if opts.IncludeGitInfo {
+		gitQuery := bleve.NewWildcardQuery("*" + searchQuery + "*")
+		gitQuery.SetField("git_branch")
+		gitQuery.SetBoost(0.3)
+		boolQuery.AddShould(gitQuery)
+	}
+
+	// 7. Search in notes
+	noteQuery := bleve.NewFuzzyQuery(searchQuery)
+	noteQuery.SetField("note")
+	noteQuery.SetBoost(0.6)
+	boolQuery.AddShould(noteQuery)
+
+	// 8. Search in tags
+	tagQuery := bleve.NewTermQuery(strings.ToLower(searchQuery))
+	tagQuery.SetField("tags")
+	tagQuery.SetBoost(0.4)
+	boolQuery.AddShould(tagQuery)
+
+	// Add boosts for recent and frequent commands
+	if opts.BoostRecent > 0 {
+		recentQuery := bleve.NewBooleanQuery()
+		recentQuery.AddMust(boolQuery)
+		recentQuery.AddMust(bleve.NewTermQuery("true").SetField("recent"))
+		// Apply boost by wrapping in a boosting query
+		// This is simplified - in practice you'd want more sophisticated boosting
+	}
+
+	return boolQuery
+}
+
+// extractRecordFromHit reconstructs a CommandRecord from a Bleve search hit
+func (f *FuzzySearchEngine) extractRecordFromHit(hit *bleve.SearchHit) (*storage.CommandRecord, error) {
+	fields := hit.Fields
+
+	record := &storage.CommandRecord{}
+
+	// Extract string fields
+	if cmd, ok := fields["command"].(string); ok {
+		record.Command = cmd
+	}
+	if wd, ok := fields["working_dir"].(string); ok {
+		record.WorkingDir = wd
+	}
+	if hostname, ok := fields["hostname"].(string); ok {
+		record.Hostname = hostname
+	}
+	if sessionID, ok := fields["session_id"].(string); ok {
+		record.SessionID = sessionID
+	}
+	if gitBranch, ok := fields["git_branch"].(string); ok {
+		record.GitBranch = gitBranch
+	}
+	if gitRoot, ok := fields["git_root"].(string); ok {
+		record.GitRoot = gitRoot
+	}
+	if user, ok := fields["user"].(string); ok {
+		record.User = user
+	}
+	if shell, ok := fields["shell"].(string); ok {
+		record.Shell = shell
+	}
+	if note, ok := fields["note"].(string); ok {
+		record.Note = note
+	}
+
+	// Extract tags array - handle multiple formats from Bleve
+	if tagsInterface, ok := fields["tags"]; ok {
+		var tags []string
+		switch v := tagsInterface.(type) {
+		case []interface{}:
+			// Array format
+			tags = make([]string, 0, len(v))
+			for _, tagInterface := range v {
+				if tag, ok := tagInterface.(string); ok {
+					tags = append(tags, tag)
+				}
+			}
+		case string:
+			// Single string format (Bleve sometimes flattens arrays)
+			if v != "" {
+				tags = []string{v}
+			}
+		case []string:
+			// Direct string array
+			tags = v
+		}
+
+		if len(tags) > 0 {
+			record.Tags = tags
+		}
+	}
+
+	// Extract numeric fields
+	if exitCode, ok := fields["exit_code"].(float64); ok {
+		record.ExitCode = int(exitCode)
+	}
+	if duration, ok := fields["duration_ms"].(float64); ok {
+		record.Duration = int64(duration)
+	}
+	if databaseID, ok := fields["database_id"].(float64); ok {
+		record.ID = int64(databaseID)
+	}
+
+	// Extract timestamp
+	if timestamp, ok := fields["timestamp"].(string); ok {
+		if t, err := time.Parse(time.RFC3339Nano, timestamp); err == nil {
+			record.Timestamp = t.UnixMilli()
+		}
+	}
+
+	// Validate required fields
+	if record.Command == "" || record.SessionID == "" {
+		return nil, fmt.Errorf("invalid record: missing required fields")
+	}
+
+	return record, nil
+}
+
+// convertToSearchableRecord converts a CommandRecord to a SearchableCommandRecord
+func (f *FuzzySearchEngine) convertToSearchableRecord(record *storage.CommandRecord) *SearchableCommandRecord {
+	// Generate unique ID
+	id := fmt.Sprintf("%s_%d", record.SessionID, record.Timestamp)
+
+	// Determine if command is recent (last 24 hours)
+	isRecent := time.Now().UnixMilli()-record.Timestamp < 24*60*60*1000
+
+	// TODO: Implement frequency detection based on command usage patterns
+	// For now, mark commonly used commands as frequent
+	isFrequent := f.isFrequentCommand(record.Command)
+
+	// Deep copy tags to prevent shared reference issues
+	var tags []string
+	if record.Tags != nil {
+		tags = make([]string, len(record.Tags))
+		copy(tags, record.Tags)
+	}
+
+	return &SearchableCommandRecord{
+		ID:         id,
+		DatabaseID: record.ID,
+		Command:    record.Command,
+		WorkingDir: record.WorkingDir,
+		Hostname:   record.Hostname,
+		SessionID:  record.SessionID,
+		GitBranch:  record.GitBranch,
+		GitRoot:    record.GitRoot,
+		User:       record.User,
+		Shell:      record.Shell,
+		Note:       record.Note,
+		Tags:       tags, // Use deep copied tags
+		ExitCode:   record.ExitCode,
+		Duration:   record.Duration,
+		Timestamp:  time.UnixMilli(record.Timestamp),
+		Success:    record.ExitCode == 0,
+		Recent:     isRecent,
+		Frequent:   isFrequent,
+	}
+}
+
+// isFrequentCommand determines if a command is frequently used
+func (f *FuzzySearchEngine) isFrequentCommand(command string) bool {
+	// Simple heuristic for frequent commands
+	// This should be replaced with actual usage statistics
+	frequentCommands := []string{
+		"git", "ls", "cd", "pwd", "cat", "grep", "find", "ps", "kill",
+		"docker", "npm", "yarn", "make", "ssh", "scp", "curl", "wget",
+		"vim", "nano", "emacs", "code", "python", "node", "go", "java",
+	}
+
+	commandLower := strings.ToLower(command)
+	for _, freq := range frequentCommands {
+		if strings.HasPrefix(commandLower, freq) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// getDefaultSearchOptions returns default search options
+func (f *FuzzySearchEngine) getDefaultSearchOptions() *FuzzySearchOptions {
+	return &FuzzySearchOptions{
+		Fuzziness:       1,
+		PrefixLength:    0,
+		BoostRecent:     1.2,
+		BoostFrequent:   1.1,
+		BoostExactMatch: 2.0,
+		BoostPrefix:     1.5,
+		MinScore:        0.1,
+		IncludeWorkDir:  true,
+		IncludeGitInfo:  true,
+		AnalyzeCommand:  true,
+		MaxCandidates:   100,
+		SearchTimeout:   10 * time.Second,
+	}
+}
+
+// GetIndexStats returns statistics about the search index
+func (f *FuzzySearchEngine) GetIndexStats() (map[string]interface{}, error) {
+	if atomic.LoadInt32(&f.initialized) == 0 {
+		return nil, fmt.Errorf("fuzzy search engine not initialized")
+	}
+
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+
+	stats := map[string]interface{}{
+		"index_path":    f.indexPath,
+		"initialized":   atomic.LoadInt32(&f.initialized) != 0,
+		"doc_count":     f.index.DocCount(),
+		"storage_stats": f.index.StatsMap(),
+	}
+
+	return stats, nil
+}
+
+// DeleteCommand removes a command from the search index
+func (f *FuzzySearchEngine) DeleteCommand(sessionID string, timestamp int64) error {
+	if atomic.LoadInt32(&f.initialized) == 0 {
+		return fmt.Errorf("fuzzy search engine not initialized")
+	}
+
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+
+	// Acquire read lock for deletion
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if f.indexLock != nil {
+		if err := f.indexLock.RLock(ctx); err != nil {
+			f.logger.Warn().Err(err).Msg("Failed to acquire read lock for deletion")
+		} else {
+			defer func() {
+				if err := f.indexLock.RUnlock(); err != nil {
+					f.logger.Warn().Err(err).Msg("Failed to release read lock")
+				}
+			}()
+		}
+	}
+
+	id := fmt.Sprintf("%s_%d", sessionID, timestamp)
+	return f.index.Delete(id)
+}
+
+// Close closes the search index and releases resources
+func (f *FuzzySearchEngine) Close() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if f.indexLock != nil {
+		if err := f.indexLock.Cleanup(); err != nil {
+			f.logger.Warn().Err(err).Msg("Failed to cleanup index locks")
+		}
+	}
+
+	if f.index != nil {
+		err := f.index.Close()
+		atomic.StoreInt32(&f.initialized, 0)
+		return err
+	}
+	return nil
+}
+
+// RebuildIndex rebuilds the entire search index from provided records
+func (f *FuzzySearchEngine) RebuildIndex(records []*storage.CommandRecord) error {
+	f.logger.Info().Int("record_count", len(records)).Msg("Rebuilding search index")
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	// Acquire write lock for rebuild
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	if f.indexLock != nil {
+		if err := f.indexLock.Lock(ctx); err != nil {
+			f.logger.Warn().Err(err).Msg("Failed to acquire write lock for rebuild")
+		} else {
+			defer func() {
+				if err := f.indexLock.Unlock(); err != nil {
+					f.logger.Warn().Err(err).Msg("Failed to release write lock")
+				}
+			}()
+		}
+	}
+
+	// Create temporary index path for atomic rebuild
+	tempIndexPath := f.indexPath + ".tmp"
+
+	// Clean up any existing temp directory
+	if err := os.RemoveAll(tempIndexPath); err != nil {
+		f.logger.Warn().Err(err).Msg("Failed to remove existing temp index")
+	}
+
+	// Close existing index
+	if f.index != nil {
+		f.index.Close()
+		f.index = nil
+	}
+
+	// Create new index in temporary location
+	mapping := f.createIndexMapping()
+	tempIndex, err := bleve.New(tempIndexPath, mapping)
+	if err != nil {
+		return fmt.Errorf("failed to create temporary index: %w", err)
+	}
+
+	// Index all records in temporary index
+	if len(records) > 0 {
+		batch := tempIndex.NewBatch()
+		for _, record := range records {
+			searchableRecord := f.convertToSearchableRecord(record)
+			if err := batch.Index(search

@@ -274,17 +274,6 @@ Rules use **allow/deny logic** with **target devices**. When rules change, **all
 
 ## 📋 Quick Reference
 
-### Sync Rules Commands
-```bash
-ccr devices show                    # List available devices
-ccr rules list                     # List all sync rules
-ccr rules allow <device>            # Allow all commands to device
-ccr rules deny <device>             # Deny all commands to device
-ccr rules delete <rule-id>          # Delete a rule
-ccr rules simulate <command>        # Test rule evaluation
-ccr rules conflicts                 # Check for rule conflicts
-```
-
 ### Tag Commands
 ```bash
 ccr tag add <id> <tag>       # Add tag to command
