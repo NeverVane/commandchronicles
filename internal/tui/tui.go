@@ -130,8 +130,25 @@ func (i CommandItem) Title() string {
 		}
 	}
 
-	// Calculate available space for context info
-	baseText := cursor + status + " " + i.record.Command
+	// First create truncated command text for accurate width calculation
+	// Replace line breaks with spaces to ensure single-line display
+	commandText := strings.ReplaceAll(strings.ReplaceAll(i.record.Command, "\n", " "), "\r", " ")
+	// Clean up multiple spaces
+	commandText = strings.Join(strings.Fields(commandText), " ")
+
+	// Truncate very long commands to prevent layout issues
+	// Reserve space for cursor, status, note indicator, tags, time, and margins
+	maxCommandLength := termWidth - 50 // Conservative estimate for UI elements
+	if maxCommandLength < 30 {
+		maxCommandLength = 30 // Minimum reasonable command display length
+	}
+
+	if len(commandText) > maxCommandLength {
+		commandText = commandText[:maxCommandLength-3] + "..."
+	}
+
+	// Calculate available space for context info using truncated command
+	baseText := cursor + status + " " + commandText
 	baseWidth := len(baseText)
 
 	// Reserve space for time info in description (approximate)
@@ -188,11 +205,7 @@ func (i CommandItem) Title() string {
 		}
 	}
 
-	// Build final command text with execution time on same line
-	// Replace line breaks with spaces to ensure single-line display
-	commandText := strings.ReplaceAll(strings.ReplaceAll(i.record.Command, "\n", " "), "\r", " ")
-	// Clean up multiple spaces
-	commandText = strings.Join(strings.Fields(commandText), " ")
+	// Build final command text with context info
 	if len(contextParts) > 0 {
 		contextText := strings.Join(contextParts, " ")
 		commandText += " " + dirStyle.Render(fmt.Sprintf("(%s)", contextText))
