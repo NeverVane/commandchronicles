@@ -41,9 +41,9 @@ import (
 )
 
 var (
-	version = "0.3.1"
+	version = "0.4.1"
 	commit  = "release"
-	date    = "2025-07-09"
+	date    = "2025-07-19"
 	author  = "Leonardo Zanobi"
 	website = "https://commandchronicles.dev"
 )
