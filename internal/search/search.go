@@ -1,10 +1,12 @@
 package search
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/NeverVane/commandchronicles/internal/cache"
@@ -22,6 +24,11 @@ type SearchService struct {
 	logger      *logger.Logger
 	stats       *SearchStats
 	fuzzyEngine *FuzzySearchEngine
+	fuzzyReady  int32 // atomic flag for fuzzy search availability
+
+	// Context for cancellation
+	ctx        context.Context
+	cancelFunc context.CancelFunc
 }
 
 // SearchStats tracks search performance metrics
@@ -111,12 +118,15 @@ type SearchOptions struct {
 
 // NewSearchService creates a new search service
 func NewSearchService(cache *cache.Cache, storage *securestorage.SecureStorage, cfg *config.Config) *SearchService {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &SearchService{
-		cache:   cache,
-		storage: storage,
-		config:  cfg,
-		logger:  logger.GetLogger().WithComponent("search"),
-		stats:   &SearchStats{},
+		cache:      cache,
+		storage:    storage,
+		config:     cfg,
+		logger:     logger.GetLogger().WithComponent("search"),
+		stats:      &SearchStats{},
+		ctx:        ctx,
+		cancelFunc: cancel,
 	}
 }
 
@@ -139,33 +149,10 @@ func (s *SearchService) Initialize(opts *SearchOptions) error {
 
 	// Initialize fuzzy search engine if enabled
 	if opts.EnableFuzzySearch {
-		s.logger.Info().Str("index_path", opts.FuzzyIndexPath).Msg("Initializing fuzzy search engine")
+		s.logger.Info().Str("index_path", opts.FuzzyIndexPath).Msg("Starting fuzzy search initialization")
 
-		s.fuzzyEngine = NewFuzzySearchEngine(opts.FuzzyIndexPath)
-		if err := s.fuzzyEngine.Initialize(); err != nil {
-			s.logger.Warn().Err(err).Msg("Failed to initialize fuzzy search engine")
-			s.fuzzyEngine = nil
-		} else {
-			s.logger.Info().Msg("Fuzzy search engine initialized successfully")
-
-			// Get initial index stats
-			if stats, err := s.fuzzyEngine.GetIndexStats(); err == nil {
-				s.logger.Info().Interface("stats", stats).Msg("Initial fuzzy index stats")
-			}
-
-			// Rebuild index if requested
-			if opts.RebuildFuzzyIndex {
-				s.logger.Info().Msg("Rebuilding fuzzy search index")
-				if err := s.rebuildFuzzyIndex(); err != nil {
-					s.logger.Warn().Err(err).Msg("Failed to rebuild fuzzy search index")
-				} else {
-					// Get post-rebuild stats
-					if stats, err := s.fuzzyEngine.GetIndexStats(); err == nil {
-						s.logger.Info().Interface("stats", stats).Msg("Post-rebuild fuzzy index stats")
-					}
-				}
-			}
-		}
+		// Initialize fuzzy search in background
+		go s.initializeFuzzyAsync(opts)
 	} else {
 		s.logger.Info().Msg("Fuzzy search disabled in options")
 	}
@@ -213,15 +200,14 @@ func (s *SearchService) Search(req *SearchRequest) (*SearchResponse, error) {
 		Bool("cache_available", s.cache != nil).
 		Msg("Determining search strategy")
 
-	if req.UseFuzzySearch && s.fuzzyEngine != nil && req.Query != "" {
+	// Strategy: Use fuzzy search only when ready and explicitly requested with a query
+	// Otherwise, use fast basic search for immediate responsiveness
+	if req.UseFuzzySearch && s.IsFuzzyReady() && req.Query != "" {
 		s.logger.Debug().Msg("Using fuzzy search strategy")
 		response, err = s.searchWithFuzzy(req)
-	} else if req.UseCache && s.cache != nil {
-		s.logger.Debug().Msg("Using cache search strategy")
-		response, err = s.searchWithCache(req)
 	} else {
-		s.logger.Debug().Msg("Using direct search strategy")
-		response, err = s.searchDirect(req)
+		s.logger.Debug().Msg("Using basic search strategy")
+		response, err = s.searchBasic(req)
 	}
 
 	if err != nil {
@@ -614,19 +600,25 @@ func (s *SearchService) GetCacheStats() *cache.CacheStats {
 func (s *SearchService) Close() error {
 	s.logger.Debug().Msg("Closing search service")
 
-	if s.cache != nil {
-		if err := s.cache.Close(); err != nil {
-			s.logger.Warn().Err(err).Msg("Failed to close cache")
-		}
+	// Cancel any background operations
+	if s.cancelFunc != nil {
+		s.cancelFunc()
 	}
 
+	// Close fuzzy engine if it exists
 	if s.fuzzyEngine != nil {
 		if err := s.fuzzyEngine.Close(); err != nil {
-			s.logger.Warn().Err(err).Msg("Failed to close fuzzy search engine")
+			s.logger.Warn().Err(err).Msg("Error closing fuzzy search engine")
 		}
 	}
 
-	s.logger.Info().Msg("Search service closed")
+	// Close cache if it exists
+	if s.cache != nil {
+		if err := s.cache.Close(); err != nil {
+			s.logger.Warn().Err(err).Msg("Error closing cache")
+		}
+	}
+
 	return nil
 }
 
@@ -980,4 +972,167 @@ func (s *SearchService) CheckAndRebuildStaleIndex() error {
 
 	s.logger.Info().Msg("Successfully rebuilt stale fuzzy search index")
 	return nil
+}
+
+// initializeFuzzyAsync initializes fuzzy search in background
+func (s *SearchService) initializeFuzzyAsync(opts *SearchOptions) {
+	s.logger.Info().Msg("Initializing fuzzy search engine in background")
+
+	// Check for cancellation before starting
+	select {
+	case <-s.ctx.Done():
+		s.logger.Debug().Msg("Fuzzy search initialization cancelled")
+		return
+	case <-time.After(100 * time.Millisecond):
+		// Add delay to ensure TUI starts first
+	}
+
+	// Check for cancellation before expensive operations
+	select {
+	case <-s.ctx.Done():
+		s.logger.Debug().Msg("Fuzzy search initialization cancelled")
+		return
+	default:
+	}
+
+	s.fuzzyEngine = NewFuzzySearchEngine(opts.FuzzyIndexPath)
+	if err := s.fuzzyEngine.Initialize(); err != nil {
+		s.logger.Warn().Err(err).Msg("Failed to initialize fuzzy search engine")
+		s.fuzzyEngine = nil
+		return
+	}
+
+	// Check for cancellation after initialization
+	select {
+	case <-s.ctx.Done():
+		s.logger.Debug().Msg("Fuzzy search initialization cancelled after init")
+		if s.fuzzyEngine != nil {
+			s.fuzzyEngine.Close()
+			s.fuzzyEngine = nil
+		}
+		return
+	default:
+	}
+
+	s.logger.Info().Msg("Fuzzy search engine initialized successfully")
+
+	// Get initial index stats
+	if stats, err := s.fuzzyEngine.GetIndexStats(); err == nil {
+		s.logger.Info().Interface("stats", stats).Msg("Initial fuzzy index stats")
+	}
+
+	// Check and rebuild index if stale or missing (with cancellation checks)
+	// This ensures the index gets built on first run or after daemon sync
+	if err := s.checkAndRebuildStaleIndexWithContext(); err != nil {
+		s.logger.Warn().Err(err).Msg("Failed to check/rebuild fuzzy index")
+		// Don't return on error, still mark as ready for basic search
+	}
+
+	// Final cancellation check before marking ready
+	select {
+	case <-s.ctx.Done():
+		s.logger.Debug().Msg("Fuzzy search initialization cancelled before ready")
+		if s.fuzzyEngine != nil {
+			s.fuzzyEngine.Close()
+			s.fuzzyEngine = nil
+		}
+		return
+	default:
+	}
+
+	// Mark fuzzy search as ready
+	atomic.StoreInt32(&s.fuzzyReady, 1)
+	s.logger.Info().Msg("Fuzzy search is now ready")
+}
+
+// searchBasic performs basic search without fuzzy matching - optimized for speed
+func (s *SearchService) searchBasic(req *SearchRequest) (*SearchResponse, error) {
+	s.logger.Debug().
+		Str("query", req.Query).
+		Int("limit", req.Limit).
+		Msg("Performing basic search")
+
+	// Direct storage access with minimal options for maximum speed
+	queryOpts := &securestorage.QueryOptions{
+		Limit:     req.Limit * 2, // Get extra for filtering
+		Offset:    req.Offset,
+		OrderBy:   "timestamp",
+		Ascending: false,
+	}
+
+	// Retrieve records from storage
+	result, err := s.storage.Retrieve(queryOpts)
+	if err != nil {
+		return nil, fmt.Errorf("basic search failed: %w", err)
+	}
+
+	// Fast filtering for basic search
+	var filteredRecords []*storage.CommandRecord
+	if req.Query != "" {
+		queryLower := strings.ToLower(req.Query)
+		for _, record := range result.Records {
+			if s.fastBasicMatch(record, queryLower) {
+				filteredRecords = append(filteredRecords, record)
+				if len(filteredRecords) >= req.Limit {
+					break // Stop early for performance
+				}
+			}
+		}
+	} else {
+		// For empty query, just return recent commands
+		filteredRecords = result.Records
+		if len(filteredRecords) > req.Limit {
+			filteredRecords = filteredRecords[:req.Limit]
+		}
+	}
+
+	// Build response
+	response := &SearchResponse{
+		Records:         filteredRecords,
+		TotalMatches:    len(filteredRecords),
+		FromCache:       0,
+		FromBatches:     len(filteredRecords),
+		HasMore:         len(result.Records) > len(filteredRecords),
+		NextOffset:      req.Offset + len(filteredRecords),
+		Query:           req.Query,
+		AppliedFilters:  s.buildAppliedFilters(req),
+		UsedFuzzySearch: false,
+		CacheHitRatio:   0.0,
+	}
+
+	return response, nil
+}
+
+// fastBasicMatch performs fast basic matching for performance
+func (s *SearchService) fastBasicMatch(record *storage.CommandRecord, queryLower string) bool {
+	commandLower := strings.ToLower(record.Command)
+
+	// Primary match: command contains query (most common case)
+	if strings.Contains(commandLower, queryLower) {
+		return true
+	}
+
+	// Quick prefix match for common patterns
+	if strings.HasPrefix(commandLower, queryLower) {
+		return true
+	}
+
+	return false
+}
+
+// IsFuzzyReady returns whether fuzzy search is ready
+func (s *SearchService) IsFuzzyReady() bool {
+	return atomic.LoadInt32(&s.fuzzyReady) != 0
+}
+
+// checkAndRebuildStaleIndexWithContext checks and rebuilds index with context cancellation
+func (s *SearchService) checkAndRebuildStaleIndexWithContext() error {
+	// Check for cancellation before expensive operation
+	select {
+	case <-s.ctx.Done():
+		return fmt.Errorf("operation cancelled")
+	default:
+	}
+
+	return s.CheckAndRebuildStaleIndex()
 }

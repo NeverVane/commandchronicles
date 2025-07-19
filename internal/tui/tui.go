@@ -335,8 +335,8 @@ var keys = keyMap{
 		key.WithHelp("?", "toggle help"),
 	),
 	Quit: key.NewBinding(
-		key.WithKeys("ctrl+c"),
-		key.WithHelp("ctrl+c", "quit"),
+		key.WithKeys("ctrl+c", "esc"),
+		key.WithHelp("ctrl+c/esc", "quit"),
 	),
 	Enter: key.NewBinding(
 		key.WithKeys("enter", "\r", "\n", "ctrl+m"),
@@ -408,6 +408,7 @@ type model struct {
 	noteEditor  textarea.Model
 
 	// State
+	fuzzyReady      bool // tracks if fuzzy search is ready
 	mode            TUIMode
 	loading         bool
 	err             error
@@ -666,6 +667,7 @@ func newModel(session *TUISession, opts *TUIOptions) model {
 		help:               h,
 		noteEditor:         noteEditor,
 		mode:               ModeSearch,
+		fuzzyReady:         false, // Initialize fuzzy search as not ready
 		fuzzyEnabled:       opts.FuzzyEnabled,
 		syntaxEnabled:      true,
 		timeParser:         search.NewTimeParser(),
@@ -681,7 +683,11 @@ func newModel(session *TUISession, opts *TUIOptions) model {
 
 // Init implements tea.Model
 func (m model) Init() tea.Cmd {
-	return textinput.Blink
+	return tea.Batch(
+		textinput.Blink,
+		m.checkFuzzyStatus(),
+		m.performSearch(), // Load initial commands
+	)
 }
 
 // Update implements tea.Model
@@ -872,6 +878,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case extendedCommandsMsg:
 		return m.handleExtendedCommandsMsg(msg)
 
+	case checkFuzzyStatusMsg:
+		return m.handleCheckFuzzyStatusMsg(msg)
+
 	case performSearchMsg:
 		return m, m.performSearch()
 
@@ -1045,6 +1054,14 @@ func (m model) renderHeader() string {
 		MarginLeft(2).
 		Render("CommandChronicles")
 
+	// Fuzzy search status indicator
+	fuzzyStatus := ""
+	if !m.fuzzyReady {
+		fuzzyStatus = " " + lipgloss.NewStyle().
+			Foreground(lipgloss.Color("8")).
+			Render("[Indexing...]")
+	}
+
 	// Update warning (if available)
 	updateWarning := ""
 	if m.updateInfo != nil {
@@ -1066,9 +1083,9 @@ func (m model) renderHeader() string {
 			Render(fmt.Sprintf("Total: %d records", m.totalRecords))
 	}
 
-	// Create header with title and warning left-aligned and counter right-aligned
+	// Create header with title, fuzzy status, and warning left-aligned and counter right-aligned
 	headerWidth := m.width
-	leftSide := title + updateWarning
+	leftSide := title + fuzzyStatus + updateWarning
 	leftSideWidth := lipgloss.Width(leftSide)
 	counterWidth := lipgloss.Width(totalCounter)
 	padding := headerWidth - leftSideWidth - counterWidth - 2
@@ -3969,6 +3986,53 @@ func (m model) performSearchDelayed() tea.Cmd {
 	})
 }
 
+// checkFuzzyStatus checks if fuzzy search is ready and updates state
+func (m model) checkFuzzyStatus() tea.Cmd {
+	return tea.Tick(time.Millisecond*500, func(t time.Time) tea.Msg {
+		return checkFuzzyStatusMsg{}
+	})
+}
+
+// checkFuzzyStatusMsg represents a message to check fuzzy search status
+type checkFuzzyStatusMsg struct{}
+
+// handleCheckFuzzyStatusMsg handles fuzzy search status checking
+func (m model) handleCheckFuzzyStatusMsg(msg checkFuzzyStatusMsg) (tea.Model, tea.Cmd) {
+	// Check if fuzzy search is ready
+	fuzzyReady := m.session.searchService.IsFuzzyReady()
+
+	// Update state if it changed
+	if fuzzyReady != m.fuzzyReady {
+		m.fuzzyReady = fuzzyReady
+		if fuzzyReady {
+			m.session.logger.Debug().Msg("Fuzzy search is now ready - enhanced search available")
+			// Force a search refresh to use enhanced search
+			if m.searchInput.Value() != "" {
+				return m, tea.Batch(m.performSearchDelayed())
+			}
+		}
+	}
+
+	// Continue checking if fuzzy search is not ready yet
+	if !fuzzyReady {
+		return m, m.checkFuzzyStatus()
+	}
+
+	// Fuzzy search is ready - now check for index staleness
+	// This detects when daemon has synced new data and rebuilds index accordingly
+	go func() {
+		if err := m.session.searchService.CheckAndRebuildStaleIndex(); err != nil {
+			m.session.logger.Warn().Err(err).Msg("Failed to check/rebuild stale search index")
+		}
+	}()
+
+	// Continue periodic checking to detect daemon sync updates
+	// Check every 10 seconds for new data from daemon
+	return m, tea.Tick(10*time.Second, func(t time.Time) tea.Msg {
+		return checkFuzzyStatusMsg{}
+	})
+}
+
 // handleDeleteConfirmKeys handles key input in delete confirmation mode
 func (m model) handleDeleteConfirmKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
@@ -4489,11 +4553,11 @@ func initializeSession(cfg *config.Config, log *logger.Logger) (*TUISession, err
 	searchOpts := &search.SearchOptions{
 		EnableCache:       true,
 		EnableFuzzySearch: true,
-		WarmupCache:       true,
+		WarmupCache:       false, // Disable cache warmup for instant startup
 		DefaultLimit:      20,
 		DefaultTimeout:    30 * time.Second,
 		FuzzyIndexPath:    fuzzyIndexPath,
-		RebuildFuzzyIndex: rebuildIndex,
+		RebuildFuzzyIndex: rebuildIndex, // Rebuild immediately if index is missing
 	}
 
 	log.Debug().
@@ -4508,11 +4572,9 @@ func initializeSession(cfg *config.Config, log *logger.Logger) (*TUISession, err
 		return nil, fmt.Errorf("failed to initialize search service: %w", err)
 	}
 
-	// Check and rebuild fuzzy index if stale
-	log.Debug().Msg("Checking fuzzy search index staleness")
-	if err := searchService.CheckAndRebuildStaleIndex(); err != nil {
-		log.Warn().Err(err).Msg("Failed to check/rebuild stale fuzzy index, fuzzy search may not work optimally")
-	}
+	// Note: Fuzzy search initialization now happens in background
+	// TUI can start immediately with basic search functionality
+	log.Debug().Msg("Fuzzy search will initialize in background")
 
 	log.Info().Msg("All TUI services initialized successfully")
 

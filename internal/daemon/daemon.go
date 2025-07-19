@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 	"time"
 
@@ -13,23 +12,24 @@ import (
 	"github.com/NeverVane/commandchronicles/internal/cache"
 	"github.com/NeverVane/commandchronicles/internal/config"
 	"github.com/NeverVane/commandchronicles/internal/logger"
-	"github.com/NeverVane/commandchronicles/internal/search"
+
+	// "github.com/NeverVane/commandchronicles/internal/search" // COMMENTED: Removed to eliminate race conditions with TUI fuzzy search
 	"github.com/NeverVane/commandchronicles/internal/sync"
 	securestorage "github.com/NeverVane/commandchronicles/pkg/storage"
 )
 
 // Daemon represents the sync daemon process
 type Daemon struct {
-	config        *config.Config
-	syncService   *sync.SyncService
-	searchService *search.SearchService
-	cache         *cache.Cache
-	logger        *logger.Logger
-	pidManager    *PIDManager
-	authManager   *auth.AuthManager
-	storage       *securestorage.SecureStorage
-	ctx           context.Context
-	cancel        context.CancelFunc
+	config      *config.Config
+	syncService *sync.SyncService
+	// searchService *search.SearchService // COMMENTED: Daemon no longer manages fuzzy search to avoid conflicts with TUI
+	cache       *cache.Cache
+	logger      *logger.Logger
+	pidManager  *PIDManager
+	authManager *auth.AuthManager
+	storage     *securestorage.SecureStorage
+	ctx         context.Context
+	cancel      context.CancelFunc
 
 	// Runtime state
 	isRunning    bool
@@ -61,8 +61,10 @@ func NewDaemon(cfg *config.Config) (*Daemon, error) {
 	// Create cache
 	hybridCache := cache.NewCache(&cfg.Cache, storage)
 
-	// Create search service
-	searchService := search.NewSearchService(hybridCache, storage, cfg)
+	// COMMENTED: Create search service - Removed to eliminate race conditions with TUI
+	// The daemon doesn't need fuzzy search functionality. It only needs storage for sync operations.
+	// TUI will exclusively manage the fuzzy search index to prevent concurrent access issues.
+	// searchService := search.NewSearchService(hybridCache, storage, cfg)
 
 	// Create sync service
 	syncService := sync.NewSyncService(cfg, storage, authMgr)
@@ -73,17 +75,17 @@ func NewDaemon(cfg *config.Config) (*Daemon, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &Daemon{
-		config:        cfg,
-		syncService:   syncService,
-		searchService: searchService,
-		cache:         hybridCache,
-		logger:        logger,
-		pidManager:    pidManager,
-		authManager:   authMgr,
-		storage:       storage,
-		ctx:           ctx,
-		cancel:        cancel,
-		isRunning:     false,
+		config:      cfg,
+		syncService: syncService,
+		// searchService: searchService, // COMMENTED: No longer needed in daemon
+		cache:       hybridCache,
+		logger:      logger,
+		pidManager:  pidManager,
+		authManager: authMgr,
+		storage:     storage,
+		ctx:         ctx,
+		cancel:      cancel,
+		isRunning:   false,
 	}, nil
 }
 
@@ -114,24 +116,34 @@ func (d *Daemon) Start() error {
 		}
 	}()
 
-	// Initialize search service with fuzzy search enabled
-	fuzzyIndexPath := filepath.Join(d.config.DataDir, "search_index")
-	searchOpts := &search.SearchOptions{
-		EnableCache:       true,
-		EnableFuzzySearch: true,
-		WarmupCache:       false, // Skip cache warmup in daemon to save resources
-		DefaultLimit:      50,
-		DefaultTimeout:    30 * time.Second,
-		FuzzyIndexPath:    fuzzyIndexPath,
-		RebuildFuzzyIndex: false, // Don't rebuild on startup, let staleness check handle it
-	}
-
-	if err := d.searchService.Initialize(searchOpts); err != nil {
-		d.logger.WithError(err).Warn().Msg("Failed to initialize search service in daemon")
-		// Don't fail daemon startup if search service fails
-	} else {
-		d.logger.Debug().Msg("Search service initialized in daemon")
-	}
+	// COMMENTED: Initialize search service - Removed to eliminate race conditions
+	//
+	// WHY REMOVED: The daemon was competing with TUI for the same fuzzy search index,
+	// causing file locking conflicts and index corruption. The daemon only needs to:
+	// 1. Sync data to/from remote server
+	// 2. Store records in secure storage
+	//
+	// The TUI exclusively manages fuzzy search indexing and gets exclusive access
+	// to the search_index folder. This eliminates race conditions and allows
+	// the TUI status to properly transition from [Indexing...] to ready.
+	//
+	// fuzzyIndexPath := filepath.Join(d.config.DataDir, "search_index")
+	// searchOpts := &search.SearchOptions{
+	//     EnableCache:       true,
+	//     EnableFuzzySearch: true,
+	//     WarmupCache:       false, // Skip cache warmup in daemon to save resources
+	//     DefaultLimit:      50,
+	//     DefaultTimeout:    30 * time.Second,
+	//     FuzzyIndexPath:    fuzzyIndexPath,
+	//     RebuildFuzzyIndex: false, // Don't rebuild on startup, let staleness check handle it
+	// }
+	//
+	// if err := d.searchService.Initialize(searchOpts); err != nil {
+	//     d.logger.WithError(err).Warn().Msg("Failed to initialize search service in daemon")
+	//     // Don't fail daemon startup if search service fails
+	// } else {
+	//     d.logger.Debug().Msg("Search service initialized in daemon")
+	// }
 
 	// Setup signal handling
 	d.setupSignalHandling()
@@ -161,9 +173,10 @@ func (d *Daemon) Stop() error {
 		d.syncService.Close()
 	}
 
-	if d.searchService != nil {
-		d.searchService.Close()
-	}
+	// COMMENTED: Search service no longer used in daemon
+	// if d.searchService != nil {
+	//     d.searchService.Close()
+	// }
 
 	if d.cache != nil {
 		d.cache.Close()
@@ -289,11 +302,17 @@ func (d *Daemon) performSync() {
 			"sync_count": d.syncCount,
 		}).Info().Msg("Sync completed successfully")
 
-		// Check and rebuild fuzzy search index if stale after successful sync
-		d.logger.Debug().Msg("Checking fuzzy search index staleness after sync")
-		if err := d.searchService.CheckAndRebuildStaleIndex(); err != nil {
-			d.logger.WithError(err).Warn().Msg("Failed to check/rebuild stale fuzzy index after sync")
-		}
+		// COMMENTED: Check and rebuild fuzzy search index - Moved to TUI responsibility
+		//
+		// WHY REMOVED: This was causing race conditions between daemon and TUI.
+		// Now the TUI will detect when new data has been synced (by checking storage
+		// timestamps) and rebuild its own fuzzy index as needed. This gives TUI
+		// exclusive control over search indexing and eliminates concurrent access issues.
+		//
+		// d.logger.Debug().Msg("Checking fuzzy search index staleness after sync")
+		// if err := d.searchService.CheckAndRebuildStaleIndex(); err != nil {
+		//     d.logger.WithError(err).Warn().Msg("Failed to check/rebuild stale fuzzy index after sync")
+		// }
 
 		return
 	}
