@@ -2,7 +2,7 @@
 
 ```
 ===================================================================
-                CommandChronicles CLI (ccr) v0.4.0
+                CommandChronicles CLI (ccr) v0.4.1
 ===================================================================
 
   🚀 A modern shell history management tool that supercharges
