@@ -11,6 +11,7 @@ package updater
 // Long live Unix! Down with proprietary bloatware! ⚡
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -19,13 +20,17 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/NeverVane/commandchronicles/internal/config"
+	"github.com/NeverVane/commandchronicles/internal/daemon"
 	"github.com/NeverVane/commandchronicles/internal/logger"
 )
 
@@ -205,6 +210,12 @@ func (u *Updater) Update(ctx context.Context, updateInfo *UpdateInfo) error {
 	u.logger.Info().
 		Str("version", updateInfo.Version).
 		Msg("Update completed successfully")
+
+	// Handle daemon restart if daemon is running
+	if err := u.handleDaemonRestart(updateInfo.Version); err != nil {
+		// Log warning but don't fail the update - binary is already updated
+		u.logger.Warn().Err(err).Msg("Failed to restart daemon, manual restart may be needed")
+	}
 
 	return nil
 }
@@ -610,4 +621,308 @@ func (u *Updater) GetCurrentVersion() string {
 // SetGithubToken sets the GitHub token for private repositories
 func (u *Updater) SetGithubToken(token string) {
 	u.githubToken = token
+}
+
+// handleDaemonRestart detects and restarts all daemon processes if running
+func (u *Updater) handleDaemonRestart(newVersion string) error {
+	// Find all running daemon processes (gracefully handles ps unavailability)
+	daemonPIDs, err := u.findAllDaemonProcesses()
+	if err != nil {
+		u.logger.Debug().Err(err).Msg("Could not find daemon processes")
+		return nil // No daemons found, nothing to do
+	}
+
+	if len(daemonPIDs) == 0 {
+		u.logger.Debug().Msg("No daemon processes running, skipping restart")
+		return nil
+	}
+
+	if len(daemonPIDs) > 1 {
+		u.logger.Warn().Int("count", len(daemonPIDs)).Ints("pids", daemonPIDs).Msg("Multiple daemon processes detected, terminating all")
+	} else {
+		u.logger.Info().Int("pid", daemonPIDs[0]).Msg("Detected running daemon, performing graceful restart")
+	}
+
+	// Gracefully shutdown all daemon processes
+	for _, pid := range daemonPIDs {
+		if err := u.gracefulShutdownDaemon(pid); err != nil {
+			u.logger.Warn().Err(err).Int("pid", pid).Msg("Graceful shutdown failed, attempting force termination")
+			if err := u.forceKillProcess(pid); err != nil {
+				u.logger.Error().Err(err).Int("pid", pid).Msg("Failed to force terminate daemon process")
+			}
+		}
+	}
+
+	// Clean up any stale PID files
+	pidFile := filepath.Join(u.config.DataDir, "daemon.pid")
+	pidManager := daemon.NewPIDManager(pidFile)
+	pidManager.CleanupStalePIDFile()
+
+	// Start new daemon with updated binary
+	if err := u.startNewDaemon(); err != nil {
+		return fmt.Errorf("failed to start new daemon: %w", err)
+	}
+
+	u.logger.Info().Str("version", newVersion).Msg("Daemon successfully restarted with new version")
+	return nil
+}
+
+// gracefulShutdownDaemon sends SIGTERM and waits for graceful shutdown
+func (u *Updater) gracefulShutdownDaemon(pid int) error {
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return fmt.Errorf("failed to find daemon process %d: %w", pid, err)
+	}
+
+	// Send SIGTERM for graceful shutdown
+	if err := process.Signal(syscall.SIGTERM); err != nil {
+		return fmt.Errorf("failed to send SIGTERM to daemon: %w", err)
+	}
+
+	// Wait for process to exit with timeout
+	timeout := time.After(30 * time.Second) // Give daemon time to finish sync
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+
+	pidManager := daemon.NewPIDManager(filepath.Join(u.config.DataDir, "daemon.pid"))
+
+	for {
+		select {
+		case <-timeout:
+			return fmt.Errorf("daemon did not shutdown gracefully within 30 seconds")
+		case <-ticker.C:
+			if !pidManager.IsProcessRunning(pid) {
+				u.logger.Debug().Msg("Daemon stopped gracefully")
+				return nil
+			}
+		}
+	}
+}
+
+// startNewDaemon starts a new daemon process with the updated binary
+func (u *Updater) startNewDaemon() error {
+	// Get path to the ccr binary (updated binary)
+	ccrBinary, err := u.findCCRBinary()
+	if err != nil {
+		return fmt.Errorf("failed to find ccr binary: %w", err)
+	}
+
+	u.logger.Info().Str("binary", ccrBinary).Msg("Starting new daemon process")
+
+	// Use os.StartProcess for better control
+	attr := &os.ProcAttr{
+		Files: []*os.File{nil, nil, nil}, // Detach from current process stdio
+		Dir:   "",                        // Use current directory
+		Sys:   nil,                       // Use default system attributes
+	}
+
+	proc, err := os.StartProcess(ccrBinary, []string{ccrBinary, "daemon"}, attr)
+	if err != nil {
+		return fmt.Errorf("failed to start daemon process with binary %s: %w", ccrBinary, err)
+	}
+
+	// Release the process so it can run independently
+	proc.Release()
+
+	// Wait and verify daemon started successfully with retries
+	pidManager := daemon.NewPIDManager(filepath.Join(u.config.DataDir, "daemon.pid"))
+
+	for i := 0; i < 10; i++ {
+		time.Sleep(500 * time.Millisecond)
+		if pidManager.IsRunning() {
+			u.logger.Info().Int("attempts", i+1).Msg("New daemon started successfully")
+			return nil
+		}
+		u.logger.Debug().Int("attempt", i+1).Msg("Waiting for daemon to start")
+	}
+
+	return fmt.Errorf("daemon failed to start within 5 seconds using binary: %s", ccrBinary)
+}
+
+// findCCRBinary attempts to find the ccr binary path
+func (u *Updater) findCCRBinary() (string, error) {
+	// Try common locations for ccr binary
+	candidates := []string{
+		"/usr/local/bin/ccr", // Most common installation
+		"/usr/bin/ccr",       // Alternative system location
+		"./ccr",              // Current directory (for testing)
+	}
+
+	// First try to get the current executable (works for normal updates)
+	if currentExe, err := os.Executable(); err == nil {
+		// If we're running from ccr binary itself, use that
+		if strings.Contains(currentExe, "ccr") && !strings.Contains(currentExe, "test") {
+			candidates = append([]string{currentExe}, candidates...)
+		}
+	}
+
+	// Test each candidate
+	for _, candidate := range candidates {
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			// Check if it's executable
+			if info.Mode()&0111 != 0 {
+				u.logger.Debug().Str("binary", candidate).Msg("Found ccr binary")
+				return candidate, nil
+			}
+		}
+	}
+
+	return "", fmt.Errorf("ccr binary not found in common locations: %v", candidates)
+}
+
+// TestDaemonRestart is a public method for testing daemon restart functionality
+func (u *Updater) TestDaemonRestart(testVersion string) error {
+	return u.handleDaemonRestart(testVersion)
+}
+
+// findAllDaemonProcesses finds all running ccr daemon processes
+func (u *Updater) findAllDaemonProcesses() ([]int, error) {
+	var allPids []int
+
+	// Method 1 (Primary): Check PID file - most reliable and portable
+	pidFile := filepath.Join(u.config.DataDir, "daemon.pid")
+	pidManager := daemon.NewPIDManager(pidFile)
+	if status, err := pidManager.GetStatus(); err == nil && status.Running {
+		allPids = append(allPids, status.PID)
+		u.logger.Debug().Int("pid", status.PID).Msg("Found daemon via PID file")
+	}
+
+	// Method 2 (Optional): Use ps command for additional detection
+	// This is a best-effort attempt - gracefully degrades if ps is unavailable
+	if additionalPids := u.findDaemonProcessesViaPS(); len(additionalPids) > 0 {
+		for _, pid := range additionalPids {
+			// Avoid duplicates from PID file method
+			found := false
+			for _, existingPID := range allPids {
+				if existingPID == pid {
+					found = true
+					break
+				}
+			}
+			if !found && u.verifyDaemonProcess(pid) {
+				allPids = append(allPids, pid)
+				u.logger.Debug().Int("pid", pid).Msg("Found additional daemon via ps")
+			}
+		}
+	}
+
+	u.logger.Debug().Int("total_daemons", len(allPids)).Ints("pids", allPids).Msg("Daemon detection completed")
+	return allPids, nil
+}
+
+// findDaemonProcessesViaPS attempts to find daemon processes using ps command
+// Returns empty slice if ps is unavailable or fails - this is a best-effort method
+func (u *Updater) findDaemonProcessesViaPS() []int {
+	var pids []int
+
+	// Try different ps command locations and syntaxes for portability
+	psCommands := []struct {
+		path string
+		args []string
+	}{
+		{"/bin/ps", []string{"ps", "aux"}},     // Linux standard
+		{"/usr/bin/ps", []string{"ps", "aux"}}, // Alternative location
+		{"/bin/ps", []string{"ps", "-ef"}},     // POSIX standard
+		{"/usr/bin/ps", []string{"ps", "-ef"}}, // POSIX alternative
+	}
+
+	for _, psCmd := range psCommands {
+		// Check if ps command exists at this path
+		if _, err := os.Stat(psCmd.path); os.IsNotExist(err) {
+			continue
+		}
+
+		// Try executing ps command
+		cmd := &exec.Cmd{
+			Path:   psCmd.path,
+			Args:   psCmd.args,
+			Stdout: &bytes.Buffer{},
+			Stderr: &bytes.Buffer{},
+		}
+
+		output, err := cmd.Output()
+		if err != nil {
+			u.logger.Debug().Err(err).Str("ps_path", psCmd.path).Msg("ps command failed, trying next option")
+			continue
+		}
+
+		// Parse ps output to find ccr daemon processes
+		lines := strings.Split(string(output), "\n")
+		for _, line := range lines {
+			if strings.Contains(line, "ccr daemon") && !strings.Contains(line, "grep") {
+				fields := strings.Fields(line)
+				// Handle different ps output formats
+				var pidField int
+				if len(fields) >= 2 {
+					// Try field 1 first (common for 'ps aux')
+					if pid, err := strconv.Atoi(fields[1]); err == nil && pid > 0 {
+						pidField = 1
+					} else if len(fields) >= 3 {
+						// Try field 2 (common for 'ps -ef')
+						if pid, err := strconv.Atoi(fields[2]); err == nil && pid > 0 {
+							pidField = 2
+						}
+					}
+
+					if pidField > 0 {
+						if pid, err := strconv.Atoi(fields[pidField]); err == nil && pid > 0 {
+							pids = append(pids, pid)
+						}
+					}
+				}
+			}
+		}
+
+		// If we found processes with one ps variant, use those results
+		if len(pids) > 0 {
+			u.logger.Debug().Str("ps_command", psCmd.path).Int("found_pids", len(pids)).Msg("Successfully used ps for daemon detection")
+			break
+		}
+	}
+
+	if len(pids) == 0 {
+		u.logger.Debug().Msg("ps command unavailable or found no additional daemons - relying on PID file method")
+	}
+
+	return pids
+}
+
+// verifyDaemonProcess verifies that a PID is actually a ccr daemon process
+func (u *Updater) verifyDaemonProcess(pid int) bool {
+	// Check if process is running
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+
+	// Send signal 0 to check if process exists
+	if err := process.Signal(syscall.Signal(0)); err != nil {
+		return false
+	}
+
+	// Additional verification could be added here (e.g., check command line)
+	return true
+}
+
+// forceKillProcess forcibly terminates a process
+func (u *Updater) forceKillProcess(pid int) error {
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return fmt.Errorf("failed to find process %d: %w", pid, err)
+	}
+
+	// Send SIGKILL
+	if err := process.Signal(syscall.SIGKILL); err != nil {
+		return fmt.Errorf("failed to send SIGKILL to process %d: %w", pid, err)
+	}
+
+	// Wait briefly for process to exit
+	time.Sleep(1 * time.Second)
+
+	pidManager := daemon.NewPIDManager(filepath.Join(u.config.DataDir, "daemon.pid"))
+	if pidManager.IsProcessRunning(pid) {
+		return fmt.Errorf("process %d still running after SIGKILL", pid)
+	}
+
+	return nil
 }

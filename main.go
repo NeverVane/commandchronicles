@@ -3909,9 +3909,20 @@ Example:
 				return fmt.Errorf("update failed: %w", err)
 			}
 
-			fmt.Printf("\n✅ Update completed successfully!\n")
-			fmt.Printf("🎉 CommandChronicles CLI is now version %s\n", updateInfo.Version)
-			fmt.Printf("\nPlease restart any running shells to use the new version.\n")
+			formatter.Separator()
+			formatter.Success("Update completed successfully!")
+			formatter.Success("CommandChronicles CLI is now version %s", updateInfo.Version)
+
+			// Check daemon status after update
+			pidFile := filepath.Join(cfg.DataDir, "daemon.pid")
+			pidManager := daemon.NewPIDManager(pidFile)
+			if status, err := pidManager.GetStatus(); err == nil && status.Running {
+				formatter.Success("Daemon automatically updated to %s", updateInfo.Version)
+			} else {
+				formatter.Info("No daemon running - update complete")
+			}
+
+			formatter.Info("Please restart any running shells to use the new version")
 
 			return nil
 		},
